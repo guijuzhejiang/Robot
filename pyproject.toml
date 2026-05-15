@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robot-pickplace-blue"
+version = "0.1.0"
+description = "SO-ARM101 PickPlaceBlue: sim env + scripted policy + LeRobot dataset pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "mujoco>=3.2",
+    "gymnasium>=1.0",
+    "numpy>=1.26",
+    "mink",
+    "lerobot>=0.5",
+    "imageio[ffmpeg]",
+    "Pillow",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["sim*", "data*", "eval*"]
+exclude = ["assets*", "docs*", "training*", "deploy*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

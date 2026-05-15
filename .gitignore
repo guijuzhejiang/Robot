@@ -216,3 +216,23 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ===== Robot project additions =====
+# IDE
+.idea/
+.vscode/
+
+# Generated data / models (large, regenerable)
+data/sim_generated/
+data/real_demos/
+data/lerobot/
+training/checkpoints/
+eval/recordings/
+eval/results/
+wandb/
+*.pth
+*.ckpt
+*.safetensors
+
+# Symlinked external repos
+assets/menagerie
