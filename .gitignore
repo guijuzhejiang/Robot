@@ -236,3 +236,62 @@ wandb/
 
 # Symlinked external repos
 assets/menagerie
+
+# ===== Large binary artifacts (use git-lfs or external storage instead) =====
+# Datasets & arrays
+*.h5
+*.hdf5
+*.npz
+*.npy
+*.parquet
+*.feather
+*.arrow
+*.tfrecord
+*.lmdb
+*.zarr/
+
+# Model weights / exports (in addition to *.pth / *.ckpt / *.safetensors above)
+*.pt
+*.bin
+*.onnx
+*.pb
+*.tflite
+*.gguf
+*.engine
+*.trt
+
+# Videos & recordings
+*.mp4
+*.avi
+*.mov
+*.webm
+*.mkv
+*.flv
+
+# Bulk images / point clouds (keep small repo assets via explicit !path exceptions if needed)
+*.tif
+*.tiff
+*.exr
+*.pcd
+*.ply
+*.bag
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tbz2
+*.7z
+*.rar
+*.gz
+
+# MuJoCo / sim caches
+*.mjb
+
+# Audio
+*.wav
+*.flac
+*.mp3
+*.ogg

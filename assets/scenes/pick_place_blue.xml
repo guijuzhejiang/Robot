@@ -37,10 +37,8 @@
     <!-- Sky + ground textures (kept simple; DR module can replace at runtime) -->
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0"
              width="512" height="3072"/>
-    <texture type="2d" name="tablecloth" builtin="checker" mark="cross"
-             rgb1="0.85 0.85 0.85" rgb2="0.65 0.65 0.65" markrgb="0.9 0.9 0.9"
-             width="300" height="300"/>
-    <material name="tablecloth" texture="tablecloth" texrepeat="6 6" reflectance="0.05"/>
+    <!-- Plain earth-yellow table surface (solid color, no checker pattern) -->
+    <material name="table_top" rgba="0.72 0.55 0.32 1" reflectance="0.05"/>
     <material name="red_cube"  rgba="0.85 0.10 0.10 1"/>
     <material name="blue_cube" rgba="0.10 0.20 0.85 1"/>
     <!-- Plate intentionally pastel green to be distinct from white tablecloth in
@@ -55,14 +53,27 @@
     <light name="light1" pos="-0.3 0.3 1.0" dir=" 0.2 -0.2 -1" diffuse="0.4 0.4 0.4"/>
     <light name="light2" pos="0.0 -0.3 1.0" dir=" 0   0.2 -1" diffuse="0.4 0.4 0.4"/>
 
-    <!-- Table: 60×60×2cm, top at z=0; SO101 base mounts at z=0 -->
-    <geom name="table" type="box" size="0.30 0.30 0.01" pos="0 0 -0.01"
-          material="tablecloth" friction="1 0.005 0.0001" contype="1" conaffinity="1"/>
+    <!-- Workshop floor under the table (visual only, no contacts) -->
+    <geom name="floor" type="plane" size="2 2 0.05" pos="0 0 -0.75"
+          rgba="0.35 0.35 0.40 1" contype="0" conaffinity="0"/>
 
-    <!-- Front camera: 30cm in front of base + 30cm above, looking at workspace
-         center (0.20, 0, 0). Look direction = (-0.447, 0, -0.894), normalized.
-         xyaxes encodes camera +x (right) and +y (up); +z (anti-look) = (0.447, 0, 0.894). -->
-    <camera name="front" pos="0.35 0.0 0.30" xyaxes="0 -1 0  0.894 0 -0.447"
+    <!-- Table: 80×80×4cm top, surface at z=0, centered at x=0.14, y=0 so the
+         arm (at origin) and the workspace (cubes/plate around x=0.18~0.28)
+         both sit near the table center. SO101 base mounts at z=0. -->
+    <geom name="table_top" type="box" size="0.40 0.40 0.02" pos="0.14 0 -0.02"
+          material="table_top" friction="1 0.005 0.0001" contype="1" conaffinity="1"/>
+
+    <!-- Four legs: 4×4cm cross section, from z≈-0.04 (under table top) to z=-0.75 (floor) -->
+    <geom name="leg_pp" type="box" size="0.02 0.02 0.355" pos=" 0.52  0.38 -0.395" rgba="0.25 0.18 0.12 1"/>
+    <geom name="leg_pn" type="box" size="0.02 0.02 0.355" pos=" 0.52 -0.38 -0.395" rgba="0.25 0.18 0.12 1"/>
+    <geom name="leg_np" type="box" size="0.02 0.02 0.355" pos="-0.24  0.38 -0.395" rgba="0.25 0.18 0.12 1"/>
+    <geom name="leg_nn" type="box" size="0.02 0.02 0.355" pos="-0.24 -0.38 -0.395" rgba="0.25 0.18 0.12 1"/>
+
+    <!-- Front camera: 35cm in front of base + 45cm above. Looks at workspace
+         center (0.18, 0, 0.05). Look vec = (-0.17, 0, -0.40), normalized ≈
+         (-0.391, 0, -0.920). Cam +z (anti-look) = (0.391, 0, 0.920);
+         cam +x (right) = (0, -1, 0); cam +y (up) = cam_z × cam_x = (0.920, 0, -0.391). -->
+    <camera name="front" pos="0.35 0.0 0.45" xyaxes="0 -1 0  0.920 0 -0.391"
             resolution="640 480" fovy="55"/>
 
     <!-- Red cube (distractor): free body, origin = geom center -->
