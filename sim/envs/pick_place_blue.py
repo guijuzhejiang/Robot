@@ -37,7 +37,8 @@ class PickPlaceBlueEnv(BaseSoArmEnv):
     # Geometry constants (must match MJCF)
     CUBE_HALF = 0.02
     PLATE_RADIUS = 0.06
-    PLATE_TOP_Z = 0.01   # plate sits with bottom at z=0, half-height 0.005, top at z=0.01
+    PLATE_HALF_HEIGHT = 0.002
+    PLATE_TOP_Z = 2 * PLATE_HALF_HEIGHT  # plate sits with bottom at z=0, top at z=0.004
 
     # Success thresholds
     DISTRACTOR_MOVE_TOL = 0.02

@@ -19,7 +19,7 @@
 | 0 环境与可行性验证 | 未启动（需硬件） | 0 | — |
 | 1 仿真平台搭建 | ✅ 已实现 | 10 | `5f23569` |
 | 2 自动轨迹生成 | ✅ 已实现 | 6 | `5f23569` |
-| 3 真机 demo + sim 扩增 | 未启动（需真机 demo） | 0 | — |
+| 3 真机 demo + sim 扩增 | ⚠️ 软件实现完成（需真机 demo 才能跑完整闭环） | 11 | (待 commit) |
 | 4 VLA 微调 | 未启动 | 0 | — |
 | 5 真机部署 | 未启动（需硬件） | 0 | — |
 | 6 HIL recovery | 未启动（需硬件 + 踏板） | 0 | — |
@@ -74,6 +74,37 @@
 
 ---
 
+## Phase 3：真机 demo 采集与 sim 扩增
+
+对应计划：[phase3-real-demo-sim-augmentation.md](plans/phase3-real-demo-sim-augmentation.md)
+
+| 文件 | 对应任务 | 实现内容 |
+|------|----------|----------|
+| `configs/world_frame.yaml` | T3.1 | 桌面 / robot base / camera 统一坐标 + 工作区 bound（与 Phase 1 env 同步）；含 ChArUco 标定 procedure 注释；calibrated=false 等真机标定 |
+| `configs/cameras.yaml` | T3.1 | front/wrist 相机 intrinsics + distortion 模板（待真机标定后填） |
+| `data/mimicgen_adapter/types.py` | 共享类型 | `ObjectPose` / `Frame` / `Segment` / `SegmentedDemo` dataclass |
+| `data/mimicgen_adapter/object_tracker.py` | T3.3 | HSV color mask + connected components + 3D back-projection；`CameraModel.from_mujoco()` 用 MJCF 真值做单元测试；`CameraModel.from_yaml()` 走真机标定路径 |
+| `data/mimicgen_adapter/segmenter.py` | T3.3 | gripper-event 边界检测 4 段（approach_blue / grasp / transport / place_release），每段带 anchor 标注 |
+| `data/mimicgen_adapter/replayer.py` | T3.4 | 多锚点 SE(2) 变换（平移+yaw）+ transport 段 cruise-z 插值 + 红 cube avoidance 抬升；输出 ReplayResult |
+| `data/mimicgen_adapter/augment.py` | T3.5 | 编排：`synthesize_source_demos()` 用脚本策略合成种子（开发期）+ `augment()` 跑 N×K 次 replay + 写 LeRobot dataset；CLI 入口 |
+| `data/converters/merge_datasets.py` | T3.6 | 多 dataset 合并，per-episode source 标签；含 shape (tuple) 修正与 dtype coerce；视频特征未支持（NotImplementedError） |
+| `data/converters/expand_instructions.py` | T3.7 | 把 1 episode 复制成 K 个不同 `task` 字符串的副本；视频特征未支持 |
+| `eval/audit_dataset.py` (extended) | T3.8 | 增加 `_per_source_stats()`：按 `source` 列分桶统计 episode 数 / 帧数 / jerk p95 / 平均时长；markdown 输出含 source 表 |
+
+**Phase 3 关键设计取舍**：
+- **Transform 数学：** 单元测试通过 (3/3) — pure shift + pure yaw + transport+red-avoid 均符合预期（详见 commit 中的 inline tests）
+- **Object tracker：** 红/蓝 cube 在 sim 渲染下平均 1.7mm 误差 ✓；plate 35mm 因透视椭圆几何不可逆已记录（真机用 ChArUco + AprilTag 解决）
+- **Synthesize source demos：** 默认 `require_success=False`，因为 Phase 1 scripted policy 还不能稳定完成任务；这条 path 只用于 pipeline 调试，真实场景永远用真机遥操 demo
+- **Video merge：** 显式 NotImplementedError 而非静默失败 — 三个解：降为 image features / 训练时分别加载 / 后续实现 mp4 chunk symlink 合并
+
+**未实现的 Phase 3 任务**：
+- T3.2 真机 demo 采集：CLI 命令（`lerobot-record ...`）在 plan 文档里，需真机执行
+- T3.3 真机 LeRobot dataset → Frame 转换：`segmenter.episode_from_lerobot_dataset` 是 NotImplementedError stub（需 FK 帮助函数从 qpos 反推 ee pose；joint-mode 数据集才需要，ee-mode 数据集直接用 action 累积即可）
+- T3.5 整合：augment 走的是合成种子 path；真机种子 path 在 `episode_from_lerobot_dataset` 落地后即可直连
+- T3.8 人工抽检 50 条 mimicgen 数据：交付物是工具，人工部分留给用户
+
+---
+
 ## 启动命令
 
 ```bash
@@ -92,9 +123,26 @@ python -m sim.collectors.parallel_runner --num-episodes 1000 --num-workers 8 \
 python -m sim.collectors.parallel_runner --num-episodes 5 --num-workers 1 \
     --repo-id local/so101_pickplace_blue_test --no-dr
 
-# 审计已生成的 shard
+# 审计已生成的 shard（含 source-aware 统计，若 dataset 有 source 字段）
 python -m eval.audit_dataset --repo-id local/so101_pickplace_blue_v1_shard00 \
     --out-dir data/sim_generated/audit/
+
+# === Phase 3 工具 ===
+# 合成种子 demo 跑 MimicGen 扩增 (pipeline 调试用；真实场景用真机种子)
+python -m data.mimicgen_adapter.augment --from-sim-seeds 5 \
+    --output-repo-id local/so101_sim_mimicgen_v1 --n-per-demo 20
+
+# 合并多源 dataset（state-only；视频需要先 finalize + 重编码）
+python -m data.converters.merge_datasets \
+    --source local/so101_real_pickplace_blue_v0:real \
+    --source local/so101_sim_mimicgen_v1:sim_mimicgen \
+    --output-repo-id local/so101_pickplace_blue_mixed_v1
+
+# 用指令池扩 K 倍语言多样性（不重新渲染，仅复制 task 字段）
+python -m data.converters.expand_instructions \
+    --source-repo-id local/so101_real_pickplace_blue_v0 \
+    --output-repo-id local/so101_real_pickplace_blue_v0_langx3 \
+    --copies 3
 
 # 单测某个文件（示例）
 python -c "
@@ -134,15 +182,14 @@ print('blue:', obs['blue_cube_pos'], 'plate:', obs['plate_pos'])
 | L-4 | DR 的 dynamics（质量/摩擦扰动）未启用 | sim2real 鲁棒性下限 | 实现 `sim/randomization/dynamics.py`，对应 Phase 2 T2.5 |
 | L-5 | metadata 字段（seed / source / object_color）未写入 dataset | Phase 3 mixed dataset 分流困难 | 升级 `DatasetWriter.add_frame_from_obs` 接受 metadata kwargs |
 | L-6 | audit 工具只读 episode 级聚合，没有 frame-level 渲染抽检 | 不易发现"打转 / 穿模"类异常 | 加 `--render-n` 抽 frame 存 PNG |
+| L-7 | object_tracker plate 检测误差 ~35mm（透视椭圆 centroid 不等于 disc center 投影） | sim 端 plate 定位精度不够做严格 audit | 真机用 AprilTag 标记 plate 中心；sim 仅用 env GT 不用 tracker |
+| L-8 | MimicGen replay 端到端 0% 成功（受 L-1 上游 grasp 失败传递） | augment pipeline 算正确但产出 0 条 | 等 L-1 修复（grasp 升级或换更小 cube）后整条 chain 自动通畅 |
+| L-9 | merge_datasets / expand_instructions 不支持视频特征 | 现 Phase 2 输出含 mp4，无法直接合并 | 加 mp4 chunk symlink path；或训练时分多 dataset 加权采样 |
+| L-10 | LeRobot 0.5.x `add_frame` 校验严格匹配 `tuple` shape | 从 info.json 读出的 `list` shape 不通过 | 已 fix：merge/expand 都把 shape coerce 为 tuple |
 
 ---
 
 ## 待实现 Phase（按优先级）
-
-### Phase 3：真机 demo + sim 扩增
-**前置**：先采 ~100 条真机 demo（Phase 0 T0.5 之后）
-**关键文件**：`data/mimicgen_adapter/{segmenter,replayer,augment,object_tracker}.py`、`data/converters/merge_datasets.py`
-建议在采到 demo 之后单独开新会话调试 segmenter 边界检测和 replayer 多锚点变换。
 
 ### Phase 4：VLA 微调
 **前置**：Phase 3 mixed dataset 就绪

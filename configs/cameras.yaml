@@ -1,0 +1,38 @@
+# Camera config (Phase 0 / Phase 3 T3.1)
+#
+# Holds intrinsics + (optional) extrinsics for each USB camera used in real demos.
+# Intrinsics are obtained via OpenCV ChArUco calibration:
+#   cv2.aruco.calibrateCameraCharuco(...)
+# Save the K matrix + distortion coeffs here.
+#
+# Extrinsics are duplicated from world_frame.yaml for convenience; keep them
+# in sync.
+
+cameras:
+  front:
+    device_index: 0          # /dev/video0 on Linux; check via `v4l2-ctl --list-devices`
+    resolution: [640, 480]
+    fps: 30
+    # Camera intrinsic matrix K = [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]
+    intrinsics:
+      fx: null   # to be filled by calibration
+      fy: null
+      cx: null
+      cy: null
+    distortion: [null, null, null, null, null]  # k1, k2, p1, p2, k3
+    # Optional pose override (otherwise read world_frame.yaml)
+    extrinsics_override: null
+
+  wrist:
+    device_index: 2
+    resolution: [640, 480]
+    fps: 30
+    intrinsics:
+      fx: null
+      fy: null
+      cx: null
+      cy: null
+    distortion: [null, null, null, null, null]
+    # Wrist cam is rigidly mounted on the gripper; extrinsics computed at runtime
+    # from forward kinematics (see sim/envs/pick_place_blue.py wrist_cam definition).
+    extrinsics_override: null

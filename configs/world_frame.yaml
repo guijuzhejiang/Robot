@@ -1,0 +1,46 @@
+# World-frame calibration (Phase 3 T3.1)
+#
+# Defines the spatial relationships among:
+#   - Robot base   (origin of MJCF; left-handed coords match MuJoCo)
+#   - Table top    (z=0 plane in MJCF; should equal real-world table top after calibration)
+#   - Front camera (USB cam on stand)
+#
+# Procedure to fill in real values:
+#   1) Mount a ChArUco/AprilTag board flat on the table
+#   2) With robot at home pose, snap a front-camera frame
+#   3) cv2.aruco.detectBoard → camera-frame board pose (rvec, tvec)
+#   4) Measure manually: board origin relative to robot base
+#   5) Compose:  T_base_to_cam = T_base_to_board × T_board_to_cam
+#   6) Write into `camera_extrinsics_front` below
+#
+# After calibration, verify by placing a cube at known (x, y, 0) in robot frame,
+# reading camera, projecting cube center back to robot frame — should match ±5mm.
+
+# Robot base pose in world frame (always identity by convention)
+robot_base_to_world:
+  translation: [0.0, 0.0, 0.0]
+  rpy: [0.0, 0.0, 0.0]
+
+# Table top plane (z=0 in robot frame; equals MJCF table top)
+table_to_robot:
+  translation: [0.0, 0.0, 0.0]
+  # In MJCF, table top is at z = 0 (table geom is at pos z=-0.01 with half-height 0.01)
+  rpy: [0.0, 0.0, 0.0]
+  half_extents: [0.30, 0.30, 0.01]  # matches assets/scenes/pick_place_blue.xml
+
+# Workspace bounds (subset of table where cubes / plate may appear)
+workspace:
+  cube_x_range: [0.10, 0.22]   # left half — must match PickPlaceBlueEnv
+  cube_y_range: [-0.12, 0.12]
+  plate_x_range: [0.24, 0.30]  # right half
+  plate_y_range: [-0.06, 0.06]
+  cube_min_separation_m: 0.08
+
+# Front camera extrinsics (fill after ChArUco calibration)
+# These are FALLBACK values copied from the MJCF; replace with real measurements
+camera_extrinsics_front:
+  translation: [0.35, 0.0, 0.30]
+  # xyaxes "0 -1 0  -0.5 0 0.866" in MJCF; equivalent rpy below (approximation)
+  rpy: [-2.094, 0.0, -1.5708]
+  # Set to true once you've replaced the values above with measured calibration
+  calibrated: false

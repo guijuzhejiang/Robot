@@ -88,6 +88,13 @@ def audit(repo_id: str, *, n_sample: int = 50, out_dir: Path | None = None) -> d
         "task_distribution_top10": task_hist.most_common(10),
     }
 
+    # Phase 3 T3.8: source-aware stats if dataset has a `source` field
+    # (set by merge_datasets.py). We parse per-episode source from the same
+    # parquet rows we already loaded.
+    source_stats = _per_source_stats(parquet_files, fps)
+    if source_stats:
+        report["source_stats"] = source_stats
+
     if out_dir:
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -97,6 +104,42 @@ def audit(repo_id: str, *, n_sample: int = 50, out_dir: Path | None = None) -> d
     return report
 
 
+def _per_source_stats(parquet_files: list[Path], fps: int | None) -> dict:
+    """If the dataset has a `source` column (string), aggregate episode counts
+    and avg jerk per source. Returns {} if no source column found."""
+    import pandas as pd
+
+    by_source: dict[str, dict] = {}
+    for pf in parquet_files:
+        df = pd.read_parquet(pf)
+        if "source" not in df.columns or "episode_index" not in df.columns:
+            return {}
+        for ep_idx, ep_df in df.groupby("episode_index"):
+            src = str(ep_df["source"].iloc[0])
+            bucket = by_source.setdefault(src, {"episodes": 0, "frames": 0,
+                                                "jerks": []})
+            bucket["episodes"] += 1
+            bucket["frames"] += len(ep_df)
+            if "action" in ep_df.columns and len(ep_df) >= 3:
+                A = np.stack(ep_df["action"].apply(np.asarray).to_list())
+                jerk = np.diff(A, n=3, axis=0)
+                bucket["jerks"].append(float(np.max(np.abs(jerk))))
+
+    if not by_source:
+        return {}
+    out: dict[str, dict] = {}
+    for src, b in by_source.items():
+        jerks = b.pop("jerks", [])
+        out[src] = {
+            "episodes": b["episodes"],
+            "frames": b["frames"],
+            "jerk_p95": float(np.quantile(jerks, 0.95)) if jerks else 0.0,
+            "jerk_mean": float(np.mean(jerks)) if jerks else 0.0,
+            "avg_seconds": (b["frames"] / b["episodes"] / fps) if fps and b["episodes"] else 0.0,
+        }
+    return out
+
+
 def _save_audit_md(report: dict, path: Path) -> None:
     lines = ["# Dataset Audit\n"]
     for k, v in report.items():
@@ -104,6 +147,16 @@ def _save_audit_md(report: dict, path: Path) -> None:
             lines.append("## Task distribution (top 10)\n")
             for task, count in v:
                 lines.append(f"- `{task}`: {count}")
+            lines.append("")
+        elif k == "source_stats":
+            lines.append("## Source-aware stats\n")
+            lines.append("| source | episodes | frames | avg_sec | jerk_mean | jerk_p95 |")
+            lines.append("|--------|----------|--------|---------|-----------|----------|")
+            for src, s in v.items():
+                lines.append(
+                    f"| {src} | {s['episodes']} | {s['frames']} | "
+                    f"{s['avg_seconds']:.1f} | {s['jerk_mean']:.3f} | {s['jerk_p95']:.3f} |"
+                )
             lines.append("")
         else:
             lines.append(f"- **{k}**: {v}")

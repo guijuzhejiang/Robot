@@ -43,7 +43,10 @@
     <material name="tablecloth" texture="tablecloth" texrepeat="6 6" reflectance="0.05"/>
     <material name="red_cube"  rgba="0.85 0.10 0.10 1"/>
     <material name="blue_cube" rgba="0.10 0.20 0.85 1"/>
-    <material name="plate"     rgba="0.95 0.95 0.95 1"/>
+    <!-- Plate intentionally pastel green to be distinct from white tablecloth in
+         the HSV tracker (see data/mimicgen_adapter/object_tracker.py). On real
+         hardware you may use any plate; just retune HSV_RANGES["plate"]. -->
+    <material name="plate"     rgba="0.45 0.85 0.55 1"/>
   </asset>
 
   <worldbody>
@@ -56,8 +59,10 @@
     <geom name="table" type="box" size="0.30 0.30 0.01" pos="0 0 -0.01"
           material="tablecloth" friction="1 0.005 0.0001" contype="1" conaffinity="1"/>
 
-    <!-- Front camera: 30cm in front of base, 30° downward tilt -->
-    <camera name="front" pos="0.35 0.0 0.30" xyaxes="0 -1 0  -0.5 0 0.866"
+    <!-- Front camera: 30cm in front of base + 30cm above, looking at workspace
+         center (0.20, 0, 0). Look direction = (-0.447, 0, -0.894), normalized.
+         xyaxes encodes camera +x (right) and +y (up); +z (anti-look) = (0.447, 0, 0.894). -->
+    <camera name="front" pos="0.35 0.0 0.30" xyaxes="0 -1 0  0.894 0 -0.447"
             resolution="640 480" fovy="55"/>
 
     <!-- Red cube (distractor): free body, origin = geom center -->
@@ -76,11 +81,13 @@
             friction="1 0.005 0.0001" condim="4" priority="1"/>
     </body>
 
-    <!-- Plate: cylinder, 6cm radius × 0.5cm half-height. Origin = geom center -->
-    <body name="plate" pos="0.28 0.0 0.005">
+    <!-- Plate: cylinder, 6cm radius × 0.2cm half-height (thin disc so the side
+         is barely visible from front cam — keeps object_tracker centroid close
+         to true plate center). Origin = geom center. -->
+    <body name="plate" pos="0.28 0.0 0.002">
       <freejoint name="plate_freejoint"/>
       <inertial pos="0 0 0" mass="0.15" diaginertia="3e-4 3e-4 5e-4"/>
-      <geom name="plate_geom" type="cylinder" size="0.06 0.005" material="plate"
+      <geom name="plate_geom" type="cylinder" size="0.06 0.002" material="plate"
             friction="1 0.005 0.0001" condim="4"/>
     </body>
   </worldbody>
@@ -93,7 +100,7 @@
          qpos="0 -1.8 1.5 0.5 0 0.5
                0.18 -0.08 0.02 1 0 0 0
                0.18  0.08 0.02 1 0 0 0
-               0.28  0.00 0.005 1 0 0 0"
+               0.28  0.00 0.002 1 0 0 0"
          ctrl="0 -1.8 1.5 0.5 0 0.5"/>
   </keyframe>
 </mujoco>
