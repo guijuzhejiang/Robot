@@ -29,7 +29,7 @@ def sample_cube_grasps(
     cube_pos: np.ndarray,
     cube_yaw: float = 0.0,
     *,
-    cube_half_extent: float = 0.02,
+    cube_half_extent: float = 0.015,
     obstacle_positions: list[np.ndarray] | None = None,
     obstacle_radii: list[float] | None = None,
     grasp_height: float = 0.008,

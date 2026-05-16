@@ -24,8 +24,11 @@ class BaseSoArmEnv(gym.Env):
     SCENE_PATH: str = ""  # subclass must set
     HOME_KEYFRAME: str = "home"
     DEFAULT_CAMERA: str = "front"
-    IMG_HEIGHT: int = 240
-    IMG_WIDTH: int = 320
+    # Default render resolution. Front camera is defined at 640x480 in
+    # the scene XML; rendering at that native size avoids downscaling
+    # blur. Override per-instance via the constructor kwargs.
+    IMG_HEIGHT: int = 480
+    IMG_WIDTH: int = 640
     SIM_STEPS_PER_CTRL: int = 5  # 0.002s * 5 = 10ms per ctrl step (100 Hz)
 
     def __init__(
@@ -36,6 +39,8 @@ class BaseSoArmEnv(gym.Env):
         render_mode: str | None = None,
         max_episode_steps: int = 200,
         seed: int | None = None,
+        img_height: int | None = None,
+        img_width: int | None = None,
     ):
         if not self.SCENE_PATH:
             raise ValueError("Subclass must set SCENE_PATH")
@@ -48,6 +53,13 @@ class BaseSoArmEnv(gym.Env):
         self.action_mode = action_mode
         self.render_mode = render_mode
         self.max_episode_steps = max_episode_steps
+        # Per-instance render resolution overrides the class-level default
+        # (so a single env class can produce SD videos for fast iteration
+        # and HD videos for the final batch without subclassing).
+        if img_height is not None:
+            self.IMG_HEIGHT = int(img_height)
+        if img_width is not None:
+            self.IMG_WIDTH = int(img_width)
 
         self.model = mujoco.MjModel.from_xml_path(self.SCENE_PATH)
         self.data = mujoco.MjData(self.model)
@@ -55,6 +67,39 @@ class BaseSoArmEnv(gym.Env):
         self._step_count = 0
         self._renderer: mujoco.Renderer | None = None
         self._viewer = None
+        # Joints (0-4) the scripted policy wants the IK to LEAVE ALONE. The
+        # canonical use is `locked_joints=[4]` so wrist_roll stays at its
+        # home value while DLS IK adjusts the other four joints. Mirrors
+        # github.com/ggand0/pick-101 `test_topdown_pick.py`.
+        self.locked_joints: list[int] | None = None
+        # If >0, the IK adds an auxiliary task pulling ee+z toward world-z so
+        # the gripper stays pointed at the table during manipulation. 0 means
+        # position-only (legacy mink-like behavior).
+        self.down_orientation_weight: float = 0.0
+        # Gripper interpretation for ee-mode `action[3]`:
+        #   "delta"    — action[3] * 0.2 added to ctrl[5] each step (legacy,
+        #                smooth for RL).
+        #   "absolute" — action[3] in [-1, 1] linearly maps to ctrl[5]'s
+        #                full ctrlrange every step (pick-101 IKController
+        #                style; required by the scripted oracle's gradual
+        #                close + contact-detection tightening).
+        self.gripper_action_mode: str = "delta"
+        # Cached IK target + gripper ctrl set by `_apply_ee_action` and
+        # re-applied every mj_step inside `step()` (mirrors pick-101's 500 Hz
+        # IK loop).
+        self._ee_target: np.ndarray | None = None
+        self._ee_gripper_ctrl: float | None = None
+        # Optional ABSOLUTE world-frame target for the gripperframe site.
+        # When set (e.g. by a scripted oracle that knows the full goal pos),
+        # env.step() ignores action[:3] and holds this target fixed across
+        # all SIM_STEPS_PER_CTRL substeps — letting the IK gain decay it
+        # exponentially toward the target, exactly the way pick-101's
+        # test_topdown_pick.py drives its 500 Hz IK loop. Stays in effect
+        # until cleared (None).
+        self.ee_target_override: np.ndarray | None = None
+        # Optional ABSOLUTE gripper action ([-1, 1], pick-101 IKController
+        # mapping). When set, ignores action[3].
+        self.gripper_action_override: float | None = None
 
         # cache joint indices for the 6 actuators
         self.n_arm_joints = self.model.nu  # 6 = 5 arm + 1 gripper
@@ -103,9 +148,17 @@ class BaseSoArmEnv(gym.Env):
         except KeyError:
             pass
 
+        # Clear any cached IK target from the previous episode so the first
+        # substep loop after reset doesn't yank ctrl back toward stale ee_pos.
+        self._ee_target = None
+        self._ee_gripper_ctrl = None
+        self.ee_target_override = None
+        self.gripper_action_override = None
+
         self._post_reset(self.np_random)
-        # Settle physics so cubes/plate rest on table
-        for _ in range(20):
+        # Settle physics so cubes/plate rest on table. 50 mj_steps matches
+        # pick-101's test_topdown_pick.py settle period.
+        for _ in range(50):
             mujoco.mj_step(self.model, self.data)
         self._step_count = 0
         return self._compute_obs(), self._info()
@@ -174,22 +227,63 @@ class BaseSoArmEnv(gym.Env):
             self._apply_ee_action(action)
 
     def _apply_ee_action(self, action: np.ndarray) -> None:
-        from sim.controllers.ik import EeIkController  # lazy
+        """Cache the EE target + gripper ctrl for this env step.
 
-        if not hasattr(self, "_ik"):
-            self._ik = EeIkController(self.model, ee_site_name="gripperframe")
-        delta_xyz = np.clip(action[:3], -1, 1) * 0.05  # 5cm/step max
-        gripper_delta = float(np.clip(action[3], -1, 1)) * 0.2  # accumulated
+        Two modes:
+          - Override mode: when `ee_target_override` is set (scripted oracle
+            path), use it directly as the absolute world-frame target. The
+            IK substep loop in `step()` refreshes ctrl against this fixed
+            target each mj_step, so motion follows a smooth exponential
+            decay (pick-101 behaviour).
+          - Delta mode (default, RL-friendly): action[:3] scaled by 0.05 m
+            and added to the current ee position to form a 1-shot target.
+            IK is solved once per ctrl tick.
 
-        target_pos = self.data.site("gripperframe").xpos.copy() + delta_xyz
-        # keep current orientation by reusing site xmat → quat
-        q_arm = self._ik.solve(self.data, target_pos)
-        # Map first 5 actuators to IK joints
-        self.data.ctrl[:5] = q_arm
-        # Gripper accumulates
-        cur_g = self.data.ctrl[5]
+        Likewise for the gripper: `gripper_action_override` wins over
+        action[3] when set.
+        """
+        if self.ee_target_override is not None:
+            self._ee_target = np.asarray(self.ee_target_override, dtype=np.float64).copy()
+        else:
+            delta_xyz = np.clip(action[:3], -1, 1) * 0.05
+            self._ee_target = self.data.site("gripperframe").xpos.copy() + delta_xyz
+
         g_lo, g_hi = self.ctrl_limits[5]
-        self.data.ctrl[5] = np.clip(cur_g + gripper_delta, g_lo, g_hi)
+        if self.gripper_action_override is not None:
+            a3 = float(np.clip(self.gripper_action_override, -1, 1))
+            self._ee_gripper_ctrl = float((a3 + 1.0) * 0.5 * (g_hi - g_lo) + g_lo)
+        elif self.gripper_action_mode == "absolute":
+            a3 = float(np.clip(action[3], -1, 1))
+            self._ee_gripper_ctrl = float((a3 + 1.0) * 0.5 * (g_hi - g_lo) + g_lo)
+        else:
+            a3 = float(np.clip(action[3], -1, 1))
+            self._ee_gripper_ctrl = float(
+                np.clip(self.data.ctrl[5] + a3 * 0.2, g_lo, g_hi)
+            )
+        # Apply once now so mj_forward / observers see a consistent ctrl.
+        self._refresh_ee_ctrl()
+
+    def _refresh_ee_ctrl(self) -> None:
+        """Resolve IK against the cached EE target and write ctrl[:6]."""
+        if self._ee_target is None:
+            return
+        if getattr(self, "use_dls_ik", False):
+            from sim.controllers.ik_dls import DlsIkController  # lazy
+            if not isinstance(getattr(self, "_ik", None), DlsIkController):
+                self._ik = DlsIkController(self.model, ee_site_name="gripperframe")
+            q_arm = self._ik.step(
+                self.data, self._ee_target, gain=0.5,
+                locked_joints=self.locked_joints,
+                down_orientation_weight=self.down_orientation_weight,
+            )
+        else:
+            from sim.controllers.ik import EeIkController  # lazy
+            if not isinstance(getattr(self, "_ik", None), EeIkController):
+                self._ik = EeIkController(self.model, ee_site_name="gripperframe")
+            q_arm = self._ik.solve(self.data, self._ee_target)
+        self.data.ctrl[:5] = q_arm
+        if self._ee_gripper_ctrl is not None:
+            self.data.ctrl[5] = self._ee_gripper_ctrl
 
     # ---------------- subclass hooks ----------------
     def _post_reset(self, rng: np.random.Generator) -> None:

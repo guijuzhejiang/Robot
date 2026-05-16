@@ -1,117 +1,115 @@
 <mujoco model="pick_place_blue">
   <!--
-    PickPlaceBlue scene:
-      - SO-ARM101 follower arm (from mujoco_menagerie/robotstudio_so101)
-      - 1 red cube (4cm) + 1 blue cube (4cm) — distractor + target
-      - 1 plate (cylindrical, 12cm diameter × 1cm height)
-      - Front cam + wrist cam (wrist cam already in so101.xml)
-      - Hemispherical sky light + 3 point lights (DR-randomizable)
+    PickPlace scene rebuilt on top of pick-101's SO-101 model
+    (ggand0/pick-101 lift_cube.xml). Single 3 cm red cube + freejoint
+    white plate.
 
-    Body-origin convention:
-      cube body origin = geom center (so xpos == geom center)
-      plate body origin = geom center of base disc
-    Free joints on cubes and plate let DR randomize pose via qpos.
-  -->
-  <!--
-    Mesh resolution:
-      The included so101.xml sets `meshdir="assets"` relative to itself.
-      MuJoCo resolves it relative to THIS parent file's location instead, so we
-      provide a symlink at ./assets that points into the menagerie SO101 mesh dir.
-      Symlink: assets/scenes/assets -> ../menagerie/robotstudio_so101/assets
-  -->
-  <option integrator="implicitfast" timestep="0.002" cone="elliptic" iterations="10"
-          ls_iterations="20" impratio="10"/>
+    Why this model and not menagerie's so101.xml:
+      - so101_new_calib.xml adds graspframe + per-fingertip sites + 1.25 mm
+        finger_pad collision geoms that produce stable multi-contact grasps.
+      - Top-down keyframe sits at wrist_flex = wrist_roll = pi/2 so the
+        gripper points straight down; the scripted policy locks joints
+        [3, 4] and lets DLS IK adjust only base/shoulder/elbow for XYZ.
 
-  <!-- Pull in SO-ARM101 defaults, assets, and worldbody arm tree -->
-  <include file="../menagerie/robotstudio_so101/so101.xml"/>
+    Path:
+      include "../so101_pick101/so101_new_calib.xml" → its <compiler>
+      meshdir="assets" resolves to assets/so101_pick101/assets/, where
+      the STL meshes live.
+  -->
+  <include file="../so101_pick101/so101_new_calib.xml"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" noslip_iterations="3"
+          impratio="10" cone="elliptic"/>
+
+  <default>
+    <geom solref="0.001 1" solimp="0.99 0.99 0.001"/>
+  </default>
 
   <statistic center="0.0 0.0 0.15" extent="0.6"/>
 
   <visual>
-    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <headlight diffuse="0.3 0.3 0.3" ambient="0.15 0.15 0.15" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
-    <global azimuth="120" elevation="-20"/>
+    <!-- Offscreen framebuffer at 1080p so envs created with
+         img_height/img_width up to 1920x1080 render without an
+         "Image width N > framebuffer width" error. Default render is
+         480x640; this just sets the upper bound. -->
+    <global azimuth="120" elevation="-20" offwidth="1920" offheight="1080"/>
+    <map znear="0.005"/>
   </visual>
 
   <asset>
-    <!-- Sky + ground textures (kept simple; DR module can replace at runtime) -->
-    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0"
+    <texture type="skybox" builtin="gradient" rgb1="0.40 0.42 0.45" rgb2="0.10 0.10 0.12"
              width="512" height="3072"/>
-    <!-- Plain earth-yellow table surface (solid color, no checker pattern) -->
-    <material name="table_top" rgba="0.72 0.55 0.32 1" reflectance="0.05"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="0.20 0.30 0.40" rgb2="0.10 0.20 0.30" markrgb="0.8 0.8 0.8"
+             width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true"
+              texrepeat="5 5" reflectance="0.2"/>
+    <material name="table_top" rgba="0.30 0.30 0.32 1" reflectance="0.02"/>
     <material name="red_cube"  rgba="0.85 0.10 0.10 1"/>
-    <material name="blue_cube" rgba="0.10 0.20 0.85 1"/>
-    <!-- Plate intentionally pastel green to be distinct from white tablecloth in
-         the HSV tracker (see data/mimicgen_adapter/object_tracker.py). On real
-         hardware you may use any plate; just retune HSV_RANGES["plate"]. -->
-    <material name="plate"     rgba="0.45 0.85 0.55 1"/>
+    <material name="plate"     rgba="0.95 0.95 0.95 1"/>
   </asset>
 
   <worldbody>
-    <!-- Three DR-randomizable point lights -->
-    <light name="light0" pos="0.3  0.3 1.0" dir="-0.2 -0.2 -1" diffuse="0.7 0.7 0.7"/>
-    <light name="light1" pos="-0.3 0.3 1.0" dir=" 0.2 -0.2 -1" diffuse="0.4 0.4 0.4"/>
-    <light name="light2" pos="0.0 -0.3 1.0" dir=" 0   0.2 -1" diffuse="0.4 0.4 0.4"/>
+    <!-- DR-randomizable point lights (sim/randomization/lighting.py keys
+         these names: light0/light1/light2). -->
+    <light name="light0" pos="0.3  0.3 1.0" dir="-0.2 -0.2 -1" diffuse="0.4 0.4 0.4"/>
+    <light name="light1" pos="-0.3 0.3 1.0" dir=" 0.2 -0.2 -1" diffuse="0.25 0.25 0.25"/>
+    <light name="light2" pos="0.0 -0.3 1.0" dir=" 0   0.2 -1" diffuse="0.25 0.25 0.25"/>
 
-    <!-- Workshop floor under the table (visual only, no contacts) -->
+    <!-- Workshop floor below the table (visual only, no contacts) -->
     <geom name="floor" type="plane" size="2 2 0.05" pos="0 0 -0.75"
-          rgba="0.35 0.35 0.40 1" contype="0" conaffinity="0"/>
+          material="groundplane" contype="0" conaffinity="0"/>
 
-    <!-- Table: 80×80×4cm top, surface at z=0, centered at x=0.14, y=0 so the
-         arm (at origin) and the workspace (cubes/plate around x=0.18~0.28)
-         both sit near the table center. SO101 base mounts at z=0. -->
+    <!-- 80×80×4 cm table, surface at z=0, slightly offset so workspace sits
+         near center (arm base at origin, cubes/plate ~x∈[0.18, 0.30]). -->
     <geom name="table_top" type="box" size="0.40 0.40 0.02" pos="0.14 0 -0.02"
           material="table_top" friction="1 0.005 0.0001" contype="1" conaffinity="1"/>
-
-    <!-- Four legs: 4×4cm cross section, from z≈-0.04 (under table top) to z=-0.75 (floor) -->
     <geom name="leg_pp" type="box" size="0.02 0.02 0.355" pos=" 0.52  0.38 -0.395" rgba="0.25 0.18 0.12 1"/>
     <geom name="leg_pn" type="box" size="0.02 0.02 0.355" pos=" 0.52 -0.38 -0.395" rgba="0.25 0.18 0.12 1"/>
     <geom name="leg_np" type="box" size="0.02 0.02 0.355" pos="-0.24  0.38 -0.395" rgba="0.25 0.18 0.12 1"/>
     <geom name="leg_nn" type="box" size="0.02 0.02 0.355" pos="-0.24 -0.38 -0.395" rgba="0.25 0.18 0.12 1"/>
 
-    <!-- Front camera: 35cm in front of base + 45cm above. Looks at workspace
-         center (0.18, 0, 0.05). Look vec = (-0.17, 0, -0.40), normalized ≈
-         (-0.391, 0, -0.920). Cam +z (anti-look) = (0.391, 0, 0.920);
-         cam +x (right) = (0, -1, 0); cam +y (up) = cam_z × cam_x = (0.920, 0, -0.391). -->
-    <camera name="front" pos="0.35 0.0 0.45" xyaxes="0 -1 0  0.920 0 -0.391"
-            resolution="640 480" fovy="55"/>
+    <!-- Front camera (sim/randomization/camera_pose.py jitters this). -->
+    <camera name="front" pos="0.55 -0.35 0.5" xyaxes="0.707 0.707 0  -0.476 0.476 0.740"
+            resolution="640 480" fovy="58"/>
 
-    <!-- Red cube (distractor): free body, origin = geom center -->
-    <body name="red_cube" pos="0.18 -0.08 0.02">
+    <!-- 3 cm red cube — single target object. condim=4 + priority=1 lets
+         the finger pads (priority 0) inherit the cube's higher-fidelity
+         friction model on contact. -->
+    <body name="red_cube" pos="0.18 -0.04 0.015">
       <freejoint name="red_cube_freejoint"/>
-      <inertial pos="0 0 0" mass="0.05" diaginertia="1.33e-5 1.33e-5 1.33e-5"/>
-      <geom name="red_cube_geom" type="box" size="0.02 0.02 0.02" material="red_cube"
-            friction="1 0.005 0.0001" condim="4" priority="1"/>
+      <inertial pos="0 0 0" mass="0.03" diaginertia="6.75e-6 6.75e-6 6.75e-6"/>
+      <geom name="red_cube_geom" type="box" size="0.015 0.015 0.015"
+            material="red_cube" friction="0.5 0.05 0.001" condim="4" priority="1"/>
     </body>
 
-    <!-- Blue cube (target): free body, origin = geom center -->
-    <body name="blue_cube" pos="0.18  0.08 0.02">
-      <freejoint name="blue_cube_freejoint"/>
-      <inertial pos="0 0 0" mass="0.05" diaginertia="1.33e-5 1.33e-5 1.33e-5"/>
-      <geom name="blue_cube_geom" type="box" size="0.02 0.02 0.02" material="blue_cube"
-            friction="1 0.005 0.0001" condim="4" priority="1"/>
-    </body>
-
-    <!-- Plate: cylinder, 6cm radius × 0.2cm half-height (thin disc so the side
-         is barely visible from front cam — keeps object_tracker centroid close
-         to true plate center). Origin = geom center. -->
-    <body name="plate" pos="0.28 0.0 0.002">
+    <!-- White plate: 6 cm radius × 0.2 cm half-height. Freejoint so DR can
+         randomize pose; mass=0.15 kg keeps it stable under cube drop. -->
+    <body name="plate" pos="0.28 0.04 0.002">
       <freejoint name="plate_freejoint"/>
       <inertial pos="0 0 0" mass="0.15" diaginertia="3e-4 3e-4 5e-4"/>
-      <geom name="plate_geom" type="cylinder" size="0.06 0.002" material="plate"
-            friction="1 0.005 0.0001" condim="4"/>
+      <geom name="plate_geom" type="cylinder" size="0.06 0.002"
+            material="plate" friction="1 0.005 0.0001" condim="4"/>
     </body>
   </worldbody>
 
   <keyframe>
-    <!-- Home pose: arm ready, ee at approx [0.24, 0, 0.14] above table center.
-         qpos = 6 arm + 7 (red free) + 7 (blue free) + 7 (plate free) = 27.
-         ctrl = 6 actuators. Last ctrl value 0.5 = gripper somewhat open. -->
+    <!--
+      Top-down home pose, matching pick-101 test_topdown_pick.py exactly:
+        shoulder_pan = 0
+        shoulder_lift = 0
+        elbow_flex = 0
+        wrist_flex = pi/2     ← bends wrist so fixed_jaw points DOWN
+        wrist_roll = pi/2     ← rotates fingers to spread along Y
+        gripper     = 0.3     ← jaws slightly closed
+      qpos layout: arm(6) + red_cube(3 pos + 4 quat) + plate(3 pos + 4 quat)
+    -->
     <key name="home"
-         qpos="0 -1.8 1.5 0.5 0 0.5
-               0.18 -0.08 0.02 1 0 0 0
-               0.18  0.08 0.02 1 0 0 0
-               0.28  0.00 0.002 1 0 0 0"
-         ctrl="0 -1.8 1.5 0.5 0 0.5"/>
+         qpos="0 0 0 1.5707963 1.5707963 0.3
+               0.18 -0.04 0.015 1 0 0 0
+               0.28  0.04 0.002 1 0 0 0"
+         ctrl="0 0 0 1.5707963 1.5707963 0.3"/>
   </keyframe>
 </mujoco>

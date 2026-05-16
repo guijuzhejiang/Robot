@@ -26,29 +26,39 @@ import numpy as np
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 
-# Standard feature schema for PickPlaceBlue (action_mode="ee")
-DEFAULT_FEATURES = {
-    "observation.images.front": {
-        "dtype": "video",
-        "shape": (240, 320, 3),
-        "names": ["height", "width", "channels"],
-    },
-    "observation.images.wrist": {
-        "dtype": "video",
-        "shape": (240, 320, 3),
-        "names": ["height", "width", "channels"],
-    },
-    "observation.state": {
-        "dtype": "float32",
-        "shape": (6,),
-        "names": [f"q{i}" for i in range(6)],
-    },
-    "action": {
-        "dtype": "float32",
-        "shape": (4,),
-        "names": ["dx", "dy", "dz", "gripper"],
-    },
-}
+def build_features(*, img_height: int = 480, img_width: int = 640) -> dict:
+    """Default LeRobot feature schema for PickPlaceBlue (action_mode='ee').
+
+    Camera height/width are parameterised so callers can request 720p / 1080p
+    captures without forking the schema; LeRobot validates frame shape on
+    every add_frame, so this MUST match what env._compute_obs produces.
+    """
+    return {
+        "observation.images.front": {
+            "dtype": "video",
+            "shape": (img_height, img_width, 3),
+            "names": ["height", "width", "channels"],
+        },
+        "observation.images.wrist": {
+            "dtype": "video",
+            "shape": (img_height, img_width, 3),
+            "names": ["height", "width", "channels"],
+        },
+        "observation.state": {
+            "dtype": "float32",
+            "shape": (6,),
+            "names": [f"q{i}" for i in range(6)],
+        },
+        "action": {
+            "dtype": "float32",
+            "shape": (4,),
+            "names": ["dx", "dy", "dz", "gripper"],
+        },
+    }
+
+
+# Back-compat alias — prefer build_features() so resolution travels with the call.
+DEFAULT_FEATURES = build_features()
 
 
 def make_or_resume_dataset(
@@ -57,13 +67,19 @@ def make_or_resume_dataset(
     features: dict | None = None,
     *,
     reset: bool = False,
+    img_height: int = 480,
+    img_width: int = 640,
 ) -> "DatasetWriter":
     """Open or resume a LeRobot dataset on disk.
 
     If `reset=True`, removes existing directory and recreates.
     Detects corrupt resumes (info.json without tasks.parquet) and rebuilds.
+
+    ``img_height`` / ``img_width`` only matter when CREATING a new dataset;
+    they're ignored when resuming an existing one (the existing meta wins).
     """
-    features = features or DEFAULT_FEATURES
+    if features is None:
+        features = build_features(img_height=img_height, img_width=img_width)
     root = Path.home() / ".cache" / "huggingface" / "lerobot" / repo_id
     meta_tasks = root / "meta" / "tasks.parquet"
 
