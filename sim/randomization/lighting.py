@@ -1,7 +1,7 @@
 """Domain randomization: light positions, directions, and intensities.
 
 Mutates `model.light_*` arrays in place. Call before env.reset() settles.
-Lights `light0`, `light1`, `light2` are defined in pick_place_blue.xml.
+Lights `light0`, `light1`, `light2` are defined in pick_place.xml.
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """Cube-pose randomization utilities.
 
-The env (pick_place_blue.py) does its own cube + plate placement inside
+The env (pick_place.py) does its own cube + plate placement inside
 `_post_reset`. This module exposes a standalone helper for tests / external
 pipelines that need sampled positions without rolling through the env.
 

@@ -6,14 +6,14 @@ from typing import Literal
 
 import numpy as np
 
-SegmentName = Literal["approach_blue", "grasp", "transport", "place_release"]
-AnchorName = Literal["blue", "plate", None]
+SegmentName = Literal["approach", "grasp", "transport", "place_release"]
+AnchorName = Literal["red", "plate", None]
 
 
 @dataclass
 class ObjectPose:
     """2D + yaw object pose in robot frame (z assumed = object half-height on table)."""
-    name: str               # "red", "blue", "plate"
+    name: str               # "red", "plate"
     xy: np.ndarray          # shape (2,)
     yaw: float = 0.0        # radians, rotation about world z
     z: float | None = None  # explicit z if known (else assumed = half-extent)
@@ -53,7 +53,7 @@ class Segment:
 
 @dataclass
 class SegmentedDemo:
-    """A real demo split into [approach_blue, grasp, transport, place_release]."""
+    """A real demo split into [approach, grasp, transport, place_release]."""
     task: str
     fps: int
     segments: list[Segment]

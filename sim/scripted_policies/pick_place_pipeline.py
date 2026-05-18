@@ -19,13 +19,20 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from sim.scripted_policies.pick_place_blue import PickPlaceBluePolicy
+from sim.scripted_policies.pick_place import PickPlacePolicy
 
 
 @dataclass
 class Episode:
     frames: list[dict] = field(default_factory=list)
+    # PRIMARY action: 6-dim joint ctrl target per step (matches LeRobot
+    # SO-100/101 convention; what SmolVLA / ACT / real-teleop produce).
+    # Values: env.data.ctrl[:6] post-step; radians + gripper qpos.
     actions: list[np.ndarray] = field(default_factory=list)
+    # SIM-ONLY auxiliary: 4-dim ee-delta + gripper, normalized [-1, 1].
+    # Useful for sim audit and future ee-derive tools; not the primary
+    # training label.
+    ee_actions: list[np.ndarray] = field(default_factory=list)
     task: str = ""
     success: bool = False
     failure_mode: str | None = None
@@ -55,7 +62,7 @@ def generate_pickplace_episode(
 
     obs, _ = env.reset(seed=seed)
 
-    policy = PickPlaceBluePolicy()
+    policy = PickPlacePolicy()
     policy.reset()
 
     ep = Episode(task=task, seed=seed)
@@ -63,15 +70,26 @@ def generate_pickplace_episode(
     done = False
     info: dict = {}
     for _ in range(steps):
-        action = policy(env, obs)
+        # Snapshot TCP pose before the step so we can re-encode the
+        # auxiliary ee_action as the true world-frame displacement (oracle
+        # returns [0,0,0,gripper] — useless as a label otherwise).
+        ee_before = env.ee_pos()
+        gym_action = policy(env, obs)
         # The pick-101 oracle snapshots cube/plate once on first call and
         # applies a FINGER_WIDTH_OFFSET to center the cube between the jaws,
         # so no per-step xy override here (overriding would wipe the offset).
-        next_obs, _, term, trunc, info = env.step(action)
+        next_obs, _, term, trunc, info = env.step(gym_action)
+        # PRIMARY action: joint ctrl target post-step.
+        joint_action = env.data.ctrl[:6].astype(np.float32).copy()
+        # Auxiliary ee-delta from real TCP motion.
+        ee_action = env.encode_ee_delta_action(
+            ee_before, env.ee_pos(), gripper_norm=float(gym_action[3])
+        )
         ep.frames.append(
             {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in obs.items()}
         )
-        ep.actions.append(action.copy())
+        ep.actions.append(joint_action)
+        ep.ee_actions.append(ee_action)
         obs = next_obs
         if term or trunc:
             done = True

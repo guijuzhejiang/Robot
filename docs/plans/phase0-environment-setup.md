@@ -2,9 +2,9 @@
 
 **周期**：1 周
 **前置依赖**：SO-ARM101 套件已到货（leader + follower 双臂）、Ubuntu 22.04 主机、NVIDIA GPU（≥12GB 显存推荐）
-**目标**：跑通从真机控制到 LeRobot 数据格式的最小闭环；在真机上评估 SmolVLA 预训练权重对 **PickPlaceBlue** 任务的零样本表现，确定起点
+**目标**：跑通从真机控制到 LeRobot 数据格式的最小闭环；在真机上评估 SmolVLA 预训练权重对 **PickPlaceRed** 任务的零样本表现，确定起点
 
-> **核心任务（贯穿全 Phase）**：桌面上随机摆放 1 个红 cube + 1 个蓝 cube + 1 个 plate，机器人需把蓝 cube 放进 plate 中。详细规约见 [README.md](README.md) 顶部"核心任务定义"一节。
+> **核心任务（贯穿全 Phase）**：桌面上随机摆放 1 个红 cube（3cm）+ 1 个 plate（6cm 半径），机器人需把红 cube 放进 plate 中。详细规约见 [README.md](README.md) 顶部"核心任务定义"一节。
 
 ---
 
@@ -118,45 +118,45 @@
 
 ---
 
-### T0.5 采集 5 条标准 LeRobot 数据（PickPlaceBlue 任务）
+### T0.5 采集 5 条标准 LeRobot 数据（PickPlaceRed 任务）
 
 **目标**：拿到第一份 LeRobot 格式数据集
 
 **步骤**：
-- [ ] 准备桌面 + 1 红 cube + 1 蓝 cube（边长 3–5cm）+ 1 plate（直径 12–15cm 浅口盘）
-- [ ] **场景摆放**：红/蓝 cube 随机分散在工作区内（不要紧贴），plate 单独放在工作区另一侧
-- [ ] 执行 `lerobot-record --robot.type=so101_follower --teleop.type=so101_leader --dataset.repo_id=local/so101_pickplace_blue_test --dataset.num_episodes=5 --dataset.single_task="put the blue cube on the plate"`
-- [ ] 每条 demo 操作要点：**始终只抓蓝 cube**，红 cube 当作干扰物保持原位
+- [ ] 准备桌面 + 1 红 cube（边长 3cm）+ 1 plate（直径 12cm 浅口盘）
+- [ ] **场景摆放**：cube 与 plate 分别放在工作区两侧（默认 cube 在 x≈0.18 附近、plate 在 x≈0.28 附近，参考仿真 home pose）
+- [ ] 执行 `lerobot-record --robot.type=so101_follower --teleop.type=so101_leader --dataset.repo_id=local/so101_pickplace_test --dataset.num_episodes=5 --dataset.single_task="put the red cube on the plate"`
+- [ ] 每条 demo 操作要点：俯视顶抓 cube → 抬起 → 移到 plate 上方 → 释放
 - [ ] 检查输出目录结构（episode、camera frames、joint trajectories）
 - [ ] 用 `lerobot-dataset-viz` 回放验证
 
 **关键文件**：
-- `data/real_demos/so101_pickplace_blue_test/`：原始数据
+- `data/real_demos/so101_pickplace_test/`：原始数据
 
 **参考**：
 - LeRobot record 文档
 
 **验证**：
 - 5 条 episode 均可回放，画面与关节同步
-- 每条 episode 末态：蓝 cube 在 plate 上 + 红 cube 未被碰动
+- 每条 episode 末态：红 cube 在 plate 上
 
 ---
 
 ### T0.6 SmolVLA 真机 zero-shot 评估
 
-**目标**：知道现有 VLA 在你的 SO101 + PickPlaceBlue 任务上的起点能力
+**目标**：知道现有 VLA 在你的 SO101 + PickPlaceRed 任务上的起点能力（注：smolvla_base 是 SO-100/101 上 LeRobot 团队预训练的通用 BC 权重，对 red cube pick-place 多半不能 zero-shot 成功；这一步主要是建立 baseline 数字）
 
 **步骤**：
 - [ ] 拉取 SmolVLA 权重：`huggingface-cli download lerobot/smolvla_base`
-- [ ] 加载到推理脚本，输入指令 `"put the blue cube on the plate"`
-- [ ] 场景：红+蓝 cube + plate 都在工作区（同 T0.5 setup）
+- [ ] 加载到推理脚本，输入指令 `"put the red cube on the plate"`
+- [ ] 场景：红 cube + plate 在工作区（同 T0.5 setup）
 - [ ] 跑 20 次试验（不同初始位置），记录：
-  - 成功次数（蓝 cube 进 plate + 红 cube 未动）
+  - 成功次数（红 cube 进 plate）
   - 失败模式归类：
-    - **颜色误判**：抓了红 cube（最重要的失败类型！）
-    - **抓取失败**：抓空 / 推开 / 抓住但抬不起 / 抓取角度错
-    - **放置失败**：抓到蓝 cube 但没放进 plate / 放在 plate 外
-    - **干扰物误碰**：抓蓝时把红撞飞
+    - **抓取失败**：抓空 / 推开 / 抓住但抬不起 / 抓取角度错（grasp_fail）
+    - **抬起掉落**：抓到但运输中掉了（lift_drop）
+    - **放置失败**：放在 plate 外（place_miss / plate_off）
+    - **超限**：关节限位 / 超时（joint_limit / timeout）
 - [ ] 录屏前 5 次作为基线对比素材
 
 **关键文件**：

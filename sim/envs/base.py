@@ -30,6 +30,13 @@ class BaseSoArmEnv(gym.Env):
     IMG_HEIGHT: int = 480
     IMG_WIDTH: int = 640
     SIM_STEPS_PER_CTRL: int = 5  # 0.002s * 5 = 10ms per ctrl step (100 Hz)
+    # World-frame meters per unit of normalized ee-delta action. action[:3] ∈
+    # [-1, 1] maps to ±EE_DELTA_SCALE m of gripperframe (TCP) translation per
+    # env step. Used by `_apply_ee_action` to drive the IK target AND by
+    # `encode_ee_delta_action` to record real ee motion as a training label
+    # under the same scale (so the dataset's action column round-trips
+    # through `_apply_ee_action` at deploy time).
+    EE_DELTA_SCALE: float = 0.05
 
     def __init__(
         self,
@@ -245,7 +252,7 @@ class BaseSoArmEnv(gym.Env):
         if self.ee_target_override is not None:
             self._ee_target = np.asarray(self.ee_target_override, dtype=np.float64).copy()
         else:
-            delta_xyz = np.clip(action[:3], -1, 1) * 0.05
+            delta_xyz = np.clip(action[:3], -1, 1) * self.EE_DELTA_SCALE
             self._ee_target = self.data.site("gripperframe").xpos.copy() + delta_xyz
 
         g_lo, g_hi = self.ctrl_limits[5]
@@ -312,3 +319,32 @@ class BaseSoArmEnv(gym.Env):
 
     def body_pos(self, name: str) -> np.ndarray:
         return self.data.body(name).xpos.copy()
+
+    def encode_ee_delta_action(
+        self,
+        ee_before: np.ndarray,
+        ee_after: np.ndarray,
+        gripper_norm: float,
+    ) -> np.ndarray:
+        """Re-encode a recorded env step as a normalized ee-mode action.
+
+        Scripted oracles drive the arm via `ee_target_override`, which makes
+        env.step ignore the gym action's `[:3]` channel. Datasets recorded
+        through that path therefore see action[:3] = 0 — useless as a VLA
+        training label. This helper produces the action that *would have*
+        produced the actual world-frame motion that occurred:
+
+            action[:3] = clip((ee_after - ee_before) / EE_DELTA_SCALE, -1, 1)
+            action[ 3] = gripper_norm  (already in [-1, 1])
+
+        Clipping is needed because the override path can move the TCP more
+        than EE_DELTA_SCALE m in one ctrl step (the IK gain is exponential
+        toward a fixed absolute target), while the delta-mode action cap is
+        ±EE_DELTA_SCALE. Clipping keeps the action schema consistent at the
+        cost of saturating during the fastest transport ticks.
+        """
+        delta_world = np.asarray(ee_after) - np.asarray(ee_before)
+        dxyz = np.clip(delta_world / self.EE_DELTA_SCALE, -1.0, 1.0)
+        return np.array(
+            [dxyz[0], dxyz[1], dxyz[2], float(gripper_norm)], dtype=np.float32
+        )

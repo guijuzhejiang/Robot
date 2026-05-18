@@ -38,12 +38,11 @@ import yaml
 from data.mimicgen_adapter.types import ObjectPose
 
 
-# HSV ranges for the canonical PickPlaceBlue palette (tuned for sim renderings;
+# HSV ranges for the canonical PickPlace palette (tuned for sim renderings;
 # real cubes may need slight adjustment after calibration).
 HSV_RANGES = {
     "red":  [(np.array([0, 120, 80]), np.array([10, 255, 255])),
              (np.array([170, 120, 80]), np.array([180, 255, 255]))],  # red wraps in HSV
-    "blue": [(np.array([95, 100, 80]), np.array([130, 255, 255]))],
     # Plate is pastel green in the MJCF (rgba 0.45 0.85 0.55). For a real
     # white plate, replace with [(0,0,180), (180,60,255)] AND add a workspace
     # ROI mask in the calling code to suppress white tablecloth false-positives.
@@ -210,19 +209,19 @@ def track_objects(
     plate_visible_z: float = 0.004,  # plate TOP surface z (what camera sees)
     plate_body_z: float = 0.002,     # plate body origin (what to return)
 ) -> dict[str, ObjectPose]:
-    """Return {"red": pose, "blue": pose, "plate": pose} from a single image.
+    """Return {"red": pose, "plate": pose} from a single image.
 
-    Cubes: visible top vs center are within 1cm; project at center for simplicity.
+    Cube: visible top vs center are within 1cm; project at center for simplicity.
     Plate: visible top surface (z=0.01) is what the camera sees; we project there
     then return body origin z (z=0.005) for consistency with MJCF body convention.
 
     Missing objects are omitted from the dict.
     """
     out: dict[str, ObjectPose] = {}
-    plane_zs = {"red": cube_z, "blue": cube_z, "plate": plate_visible_z}
-    return_zs = {"red": cube_z, "blue": cube_z, "plate": plate_body_z}
-    use_ellipse = {"red": False, "blue": False, "plate": True}
-    for color in ("red", "blue", "plate"):
+    plane_zs = {"red": cube_z, "plate": plate_visible_z}
+    return_zs = {"red": cube_z, "plate": plate_body_z}
+    use_ellipse = {"red": False, "plate": True}
+    for color in ("red", "plate"):
         dets = detect_color(image_rgb, color, fit_ellipse=use_ellipse[color])
         if not dets:
             continue

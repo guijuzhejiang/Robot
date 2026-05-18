@@ -2,9 +2,9 @@
 
 **周期**：2–3 周
 **前置依赖**：Phase 4 完成（v1 模型已选定）
-**目标**：把 Phase 4 的 winner 模型部署到真机 SO101，量化真机性能，针对失败模式补采少量真机数据并做 co-finetune，最终真机 **PickPlaceBlue** 成功率 > 60%（含颜色锚定 + place 精度）
+**目标**：把 Phase 4 的 winner 模型部署到真机 SO101，量化真机性能，针对失败模式补采少量真机数据并做 co-finetune，最终真机 **PickPlaceRed** 成功率 > 60%（含 place 精度）
 
-> **核心任务**：抓蓝 cube 放进 plate（红 cube 是干扰物）。详细规约见 [README.md](README.md)。
+> **核心任务**：把红 cube 放进 plate。详细规约见 [README.md](README.md)。
 
 ---
 
@@ -103,20 +103,20 @@
 
 **步骤**：
 - [ ] 准备评估 setup：
-  - 1 红 cube + 1 蓝 cube + 1 plate
-  - **30 次试验**，红/蓝相对位置覆盖 4 象限（每象限 ≥ 6 次），plate 位置 ±3cm 抖动
-  - 其中 **6 次"颜色锚定难度测试"**：红 cube 离机械臂更近（容易被默认抓到）
+  - 1 红 cube + 1 plate
+  - **30 次试验**，cube 位置覆盖工作区 4 象限（每象限 ≥ 6 次），plate 位置 ±3cm 抖动
+  - 每种 cube yaw（0/π/2/π/3π/2）至少 6 次
 - [ ] 每次试验：
   - 给定语言指令（随机选 1 种变体）
-  - 启动 client，最多 45 秒（pick-place 比 pick 长）
+  - 启动 client，最多 30 秒
   - 记录：成功 / 失败、失败模式
 - [ ] **失败模式细分**：
-  - `color_confusion`：抓了红 cube（**最严重**）
-  - `grasp_fail`：抓蓝失败
-  - `transport_hit_red`：搬运时把红 cube 撞飞
-  - `place_miss`：放在 plate 外
+  - `grasp_fail`：抓不到（最常见）
   - `lift_drop`：抓到了但途中掉
-  - `timeout`：45s 内未完成
+  - `place_miss`：放在 plate 外
+  - `plate_off`：cube 反弹出 plate
+  - `joint_limit`：关节触限
+  - `timeout`：30s 内未完成
 - [ ] 同步全程录像（前置相机外加一个手机相机）
 
 **关键文件**：
@@ -124,7 +124,7 @@
 - `eval/results/real_v1_baseline.md`：报告
 - `eval/recordings/real_v1/`：视频
 
-**验证**：得到量化基线（如 X/30），失败模式有归类；尤其 `color_confusion` 比例是 Phase 5 核心要降的指标
+**验证**：得到量化基线（如 X/30），失败模式有归类
 
 ---
 
@@ -133,14 +133,12 @@
 **目标**：知道下一步该补什么数据
 
 **步骤**：
-- [ ] 把 T5.3 的失败分类成至少 5 类：
-  - **颜色识别**：抓了红 cube（color_confusion）
+- [ ] 把 T5.3 的失败分类成至少 4 类：
   - 几何：approach 角度偏 / 高度错
-  - 抓取：闭合时机错 / 闭合不到位
-  - 搬运：transport 中撞红 cube 或脱手
-  - 放置：blue cube 放在 plate 外或弹出
+  - 抓取：闭合时机错 / 闭合不到位 / cube yaw 难
+  - 搬运：transport 中脱手
+  - 放置：cube 放在 plate 外或弹出
 - [ ] 对每类列出"假设的补救数据"
-- [ ] 颜色识别失败重点排查：训练数据红蓝对比度 / 真机光照下蓝色饱和度 / camera 白平衡
 
 **关键文件**：
 - `eval/results/real_v1_failure_analysis.md`
@@ -155,16 +153,15 @@
 
 **步骤**：
 - [ ] 按 T5.4 列表，专门针对每类失败补采：
-  - 颜色识别失败 → 红 cube 距机械臂更近的极端位置多采（强迫学习颜色而非空间近邻）
   - 几何失败 → 在工作区边缘补采
-  - 抓取失败 → 在不同 blue cube 朝向下补采
-  - 搬运失败 → 在红/蓝距离最近的几种摆放下重点采
+  - 抓取失败 → 在不同 cube yaw（特别是 ±π/4 边界、π/2 等离散值附近）下补采
+  - 搬运失败 → cube 在 plate 同侧的近距离配置下采
   - 放置失败 → 在不同 plate 位置 / 不同 plate 颜色下补采
 - [ ] 总量目标 20–50 条
-- [ ] 保存为 `data/real_demos/so101_real_pickplace_blue_targeted_v1/`
+- [ ] 保存为 `data/real_demos/so101_real_pickplace_targeted_v1/`
 
 **关键文件**：
-- `data/real_demos/so101_real_pickplace_blue_targeted_v1/`
+- `data/real_demos/so101_real_pickplace_targeted_v1/`
 
 **验证**：补采数据已 ingest，且能被 LeRobot 加载
 
@@ -216,12 +213,11 @@
 **步骤**：
 - [ ] 干扰评估（每项 10 次）：
   - 桌面铺一张新颜色桌布
-  - 加 1 个**额外**干扰物（如绿/黄 cube；总共 3 个 cube + plate）
+  - 加 1 个**额外**干扰物（如绿/黄 cube；测试模型抗干扰能力，但语言锚定仍是 red）
   - 调整环境光（开关一盏灯）
   - 摄像头位置抖动 ±3cm
   - **plate 替换**：换不同形状/颜色的盘子（白瓷盘、黑色塑料盘）
 - [ ] 记录成功率衰减幅度
-- [ ] 单独记录"颜色锚定准确率"在每种干扰下的衰减
 
 **关键文件**：
 - `eval/real_robustness.py`
@@ -256,7 +252,6 @@
 - [ ] v1 模型真机基线已建立
 - [ ] 失败模式归类清晰
 - [ ] v2 模型在真机成功率 > 60%
-- [ ] 颜色锚定准确率 > 85%（即使整体成功率 60%，"抓对颜色"必须更高）
 - [ ] 鲁棒性评估通过（5 项干扰平均衰减 < 30%）
 - [ ] 部署文档 + 演示视频齐全
 
@@ -267,8 +262,8 @@
 | 风险 | 应对 |
 |------|------|
 | 推理延迟过高导致真机抖动 | 推理服务用 fp16；调小 image resolution；增大 action chunk |
-| 真机相机与仿真相机白平衡差异大导致蓝/红识别偏差 | 在 inference server 加 colorjitter / 白平衡校正；Phase 3 训练时强制抖色相 ±15° |
-| 真机蓝 cube 在某些光照下偏紫/偏青 | 用色卡校正白平衡；选饱和度高的蓝（如 RAL 5005 信号蓝） |
+| 真机相机与仿真相机白平衡差异大导致 cube 识别偏差 | 在 inference server 加 colorjitter / 白平衡校正；Phase 3 训练时强制抖色相 ±15° |
+| 真机红 cube 在某些光照下偏暗/偏粉 | 用色卡校正白平衡；选饱和度高的红（如 RAL 3020 交通红） |
 | 真机 zero-shot 成功率 < 20% 让你怀疑路线 | 这是 sim2real 典型情况，先做 co-finetune 再下结论；最差就只用真机数据小幅微调 |
 | Co-finetune 过拟合 targeted，泛化变差 | targeted 权重不要太高（≤ 10×）；保留 v1 的 broad sim 数据 |
 | 安全护栏触发频繁 | 用更严格的 action smoothing（action chunk + EMA） |

@@ -2,9 +2,11 @@
 
 **周期**：1–2 周
 **前置依赖**：Phase 0 完成
-**目标**：在 MuJoCo 中跑通 SO-ARM100 模型；实现一个最小可用的 **`PickPlaceBlue`** 任务环境（含 reset / step / success / 域随机化），手写脚本策略能在仿真里完成"抓蓝 cube → 放进 plate"全流程
+**目标**：在 MuJoCo 中跑通 SO-ARM101 模型；实现一个最小可用的 **`PickPlaceRed`** 任务环境（含 reset / step / success / 域随机化），手写脚本策略能在仿真里完成"抓红 cube → 放进 plate"全流程
 
-> **核心任务**：桌面上随机摆放 1 红 cube + 1 蓝 cube + 1 plate，把蓝 cube 放进 plate。详细规约见 [README.md](README.md) 顶部"核心任务定义"。
+> **核心任务**：桌面上 1 红 cube（3cm）+ 1 plate（6cm 半径），把红 cube 放进 plate。机械臂俯视顶抓（wrist_flex/wrist_roll 锁定 π/2）。详细规约见 [README.md](README.md) 顶部"核心任务定义"。
+
+> **命名约定**：代码统一使用颜色无关命名 `sim/envs/pick_place.py`、`assets/scenes/pick_place.xml`、类 `PickPlaceEnv`，便于将来扩展到其他颜色 / 多物体变体；当前实现是 red-only 任务。
 
 ---
 
@@ -12,36 +14,35 @@
 
 > 所有命令在仓库根目录 `/home/zzg/workspace/pycharm/Robot` 下、`conda activate py312_cu121` 后执行。
 
-> ⚠️ **已知限制 L-1**：当前 6 阶段脚本策略实际抓取成功率约 **0–20%**（[docs/implementation-status.md](../implementation-status.md#已知限制)），默认 collector 只保存成功 episode，所以"正式批量"命令会输出 0 个 mp4。要先看视频/做调试，**强烈推荐加 `--keep-failures --cleanup-after-collect`**，失败 episode 也会被切成单独 mp4 集中到一个目录、shard 临时文件自动删除。
+> ✅ **当前脚本策略成功率 93.8%**（v21 配置，pick-101 风格俯视顶抓 + cube yaw 4 等分量化 + 按 cube 位置同步 wrist_roll）。详见 [docs/lessons-learned-so101-grasp.md](../lessons-learned-so101-grasp.md)。
 
 | 想做的事 | 一行命令 | 产出 |
 |---------|---------|------|
-| 用 MuJoCo viewer 打开仿真场景，手动拖动 SO101 / cube / plate（T1.1–T1.2、T1.5 视觉自检） | `python -m mujoco.viewer --mjcf=assets/scenes/pick_place_blue.xml` | GUI 窗口 |
-| **看视频 / debug L-1**：跑 N 条 episode、不管成败都切成 mp4、删 dataset 缓存 | `python -m sim.collectors.parallel_runner --num-episodes 20 --num-workers 4 --repo-id local/so101_debug --keep-failures --cleanup-after-collect` | `~/.cache/huggingface/lerobot/local/so101_debug_videos/{front,wrist}/shardXX_epNNNN_<SUCCESS\|FAIL_mode>.mp4`（每条 episode 一个 10s mp4） |
+| 用 MuJoCo viewer 打开仿真场景，手动拖动 SO101 / cube / plate（T1.1–T1.2、T1.5 视觉自检） | `python -m mujoco.viewer --mjcf=assets/scenes/pick_place.xml` | GUI 窗口 |
+| 跑 20 条 episode 看视频（成败都存，shard 里清掉 images/ 临时 PNG） | `python -m sim.collectors.parallel_runner --num-episodes 20 --num-workers 4 --repo-id local/so101_debug --keep-failures --cleanup-after-collect` | 8 个 shard dataset（含 front+wrist 拼合 mp4 + parquet + meta），task 字段失败时会带 `[FAIL:<mode>]` 后缀 |
 | 关闭域随机化做 debug | 上一条命令追加 `--no-dr` | 同上 |
-| **正式批量采集（L-1 修好后）**：只保存成功 episode 到 LeRobot dataset，供训练 | `python -m sim.collectors.parallel_runner --num-episodes 1000 --num-workers 4 --repo-id local/so101_pickplace_blue_v0` | `~/.cache/huggingface/lerobot/local/so101_pickplace_blue_v0_shard{00..03}/`（保留完整 dataset 含 mp4 + parquet） |
-| 审计采集到的数据集 | `python -m eval.audit_dataset --repo-id local/so101_pickplace_blue_v0_shard00 --n-sample 50` | 控制台报告 + 可选 `--out-dir` 输出 markdown |
-| 清理本地 cache（占空间时用） | `rm -rf ~/.cache/huggingface/lerobot/local/so101_pickplace_blue_v0_shard*` | — |
+| **正式批量采集**：只保存成功 episode（默认行为），供训练用 | `python -m sim.collectors.parallel_runner --num-episodes 1000 --num-workers 8 --repo-id local/so101_pickplace_v0 --cleanup-after-collect` | `~/.cache/huggingface/lerobot/local/so101_pickplace_v0_shard{00..07}/`（保留完整 dataset 含 mp4 + parquet） |
+| 合并 8 个 shard 成单一训练数据集 | `python -m data.converters.merge_shards --shard-glob 'local/so101_pickplace_v0_shard*' --output-repo local/so101_pickplace_v0` | `~/.cache/huggingface/lerobot/local/so101_pickplace_v0/`（合并后单数据集） |
+| 审计采集到的数据集 | `python -m eval.audit_dataset --repo-id local/so101_pickplace_v0 --n-sample 50` | 控制台报告 + 可选 `--out-dir` 输出 markdown |
+| 验证合并 OK 后清掉 shard | `rm -rf ~/.cache/huggingface/lerobot/local/so101_pickplace_v0_shard*` | — |
 
-**两个新 flag 详解**：
+**两个 flag 详解**：
 
-- `--keep-failures`：失败 episode 也写入 dataset；它们的 `task` 字段会被打上 `[FAIL:<mode>]` 后缀（mode ∈ `grasp_fail` / `place_miss` / `distractor_hit` / `color_confusion` / `timeout`），下游 audit / training 可以按此过滤剔除。
-- `--cleanup-after-collect`：跑完后用 ffmpeg 按 `episodes.parquet` 里记的 `[from_timestamp, to_timestamp]` 把每个 episode 从 LeRobot 合并 mp4 中切出来，写到 `<repo_id>_videos/{front,wrist}/shardXX_epNNNN_<status>.mp4`，然后 **删除整个 shard dataset 目录**（含 parquet、meta、原 chunked mp4）。代价：删完后 `audit_dataset` 找不到这个 repo_id，但视频文件保留。
+- `--keep-failures`：失败 episode 也写入 dataset；它们的 `task` 字段会被打上 `[FAIL:<mode>]` 后缀（mode ∈ `grasp_fail` / `lift_drop` / `place_miss` / `plate_off` / `joint_limit` / `timeout`），下游 audit / training 可以按此过滤剔除。
+- `--cleanup-after-collect`：每个 shard 落盘后删掉 LeRobot 编码 mp4 时残留的 `images/` 临时 PNG 目录（保留训练必需的 `data/` + `videos/` + `meta/`）。配合 `merge_shards` 使用。
 
 **入口与任务清单的对应关系**：
 
 | Task | 实现文件（库） | 由哪个 CLI 串起来 |
 |------|--------------|------------------|
-| T1.1–T1.2 验证 MuJoCo + 模型 | `assets/scenes/pick_place_blue.xml` + `assets/menagerie/robotstudio_so101/` | `python -m mujoco.viewer` |
-| T1.3 BaseSoArmEnv 基类 | [`sim/envs/base.py`](../../sim/envs/base.py) | 被 `PickPlaceBlueEnv` 继承 |
-| T1.4 PickPlaceBlue 环境 | [`sim/envs/pick_place_blue.py`](../../sim/envs/pick_place_blue.py) | `parallel_runner` / `pick_place_pipeline` |
-| T1.5 双相机渲染 | `assets/scenes/pick_place_blue.xml`（`front` + `wrist` camera）+ `sim/envs/base.py::_render_cameras` | 同上 |
-| T1.6 微分 IK | [`sim/controllers/ik.py`](../../sim/controllers/ik.py)（mink） | 被脚本策略调用 |
-| T1.7 6 阶段脚本策略 | [`sim/scripted_policies/pick_place_blue.py`](../../sim/scripted_policies/pick_place_blue.py) | `parallel_runner` / `pick_place_pipeline` |
+| T1.1–T1.2 验证 MuJoCo + 模型 | `assets/scenes/pick_place.xml` + `assets/so101_pick101/` | `python -m mujoco.viewer` |
+| T1.3 BaseSoArmEnv 基类 | [`sim/envs/base.py`](../../sim/envs/base.py) | 被 `PickPlaceEnv` 继承 |
+| T1.4 PickPlaceRed 环境（类 `PickPlaceEnv`） | [`sim/envs/pick_place.py`](../../sim/envs/pick_place.py) | `parallel_runner` / `pick_place_pipeline` |
+| T1.5 双相机渲染 | `assets/scenes/pick_place.xml`（`front` + `wrist` camera）+ `sim/envs/base.py::_render_cameras` | 同上 |
+| T1.6 微分 IK（DLS） | [`sim/controllers/ik_dls.py`](../../sim/controllers/ik_dls.py) | 被脚本策略调用 |
+| T1.7 9 阶段脚本策略 | [`sim/scripted_policies/pick_place.py`](../../sim/scripted_policies/pick_place.py) | `parallel_runner` / `pick_place_pipeline` |
 | T1.8 域随机化 | [`sim/randomization/`](../../sim/randomization/) | 默认开启，`--no-dr` 关闭 |
 | T1.9 LeRobot writer | [`data/converters/sim_to_lerobot.py`](../../data/converters/sim_to_lerobot.py) | 被 `parallel_runner` 调用 |
-
-> **TL;DR**：当下 L-1 未修，想看抓取视频请用表中第 2 行（`--keep-failures --cleanup-after-collect`）。输出在 `~/.cache/huggingface/lerobot/local/<repo_id>_videos/front/shardXX_epNNNN_FAIL_grasp_fail.mp4`（每条 episode 一个 10s mp4，文件名含成败状态）。
 
 ---
 
@@ -149,35 +150,37 @@
 
 ---
 
-### T1.4 实现 PickPlaceBlue 环境
+### T1.4 实现 PickPlaceRed 环境
 
 **目标**：第一个完整任务
 
 **步骤**：
-- [ ] 创建 `sim/envs/pick_place_blue.py`
-- [ ] **场景包含**：SO-ARM100 + 桌面 + 红色立方体（4cm）+ 蓝色立方体（4cm）+ 盘子（圆柱 plate，直径 12cm × 高 1cm）
-- [ ] **MJCF body origin 约定**：cube 的 body origin 放在 geom 中心（避免后续 IK 计算偏移）；plate 同理
-- [ ] `reset()`：
-  - 工作区切分为左右两块：**plate 固定在右半区**（位置抖动 ±3cm），**两个 cube 随机分散在左半区**（最小间距 8cm，避免紧贴）
-  - cube 颜色绑定固定（红/蓝），不随机化颜色（颜色是语义锚点）
-  - 初始 yaw 各自随机 [-π, π]
-- [ ] `step()`：动作为关节位置目标（7 维 = 6 关节 + 1 夹爪）
+- [ ] 创建 `sim/envs/pick_place.py`（颜色无关命名，内容是 red-only 任务；类名 `PickPlaceEnv`）
+- [ ] **场景包含**：SO-ARM101（pick-101 移植的 `assets/so101_pick101/so101_new_calib.xml`，带 graspframe + finger pad）+ 桌面 + 红色立方体（3cm）+ 白色 plate（cylinder，6cm 半径 × 0.2cm 半高，freejoint，质量 0.15kg）
+- [ ] **MJCF body origin 约定**：cube body origin 放在 geom 中心（避免 IK 计算偏移）；plate 同理
+- [ ] `reset()` 工作区（v21 配置）：
+  - `CUBE_X_RANGE=(0.16, 0.22)`、`CUBE_Y_RANGE=(-0.08, 0.08)`
+  - `PLATE_X_RANGE=(0.24, 0.30)`、`PLATE_Y_RANGE=(-0.06, 0.06)`
+  - cube yaw 量化到 `{0, π/2, π, 3π/2}`（利用 cube 4 重对称避开 45° 夹爪失败）
+  - **wrist_roll 按 cube 位置同步**：`wrist_roll = clip(π/2 - atan2(cube.y, cube.x), 限位)`，保证总 z 旋转 = π/2
+- [ ] `step()`：action_mode="ee" 时 action 是 4 维（dx, dy, dz, gripper），action_mode="joint" 时是 7 维关节目标
 - [ ] `evaluate_success()`：以下全部满足 → 成功
-  1. blue cube 中心到 plate 中心 xy 距离 < plate 半径（5cm）
-  2. blue cube 底面 z 在 plate 表面 ±1cm 内（确认落地）
-  3. red cube 位置相对初始位移 < 2cm（**未被误碰**）
-  4. 夹爪在终态已松开（gripper qpos > 阈值）
-- [ ] `evaluate_failure_mode()`：返回失败原因枚举（`color_confusion` / `grasp_fail` / `place_miss` / `distractor_hit` / `timeout`）
-- [ ] 写 MJCF：在 `assets/scenes/pick_place_blue.xml` 加入桌子 + 双 cube + plate
+  1. red cube 中心 xy 到 plate 中心距离 < plate 半径
+  2. red cube 底面 z 在 plate 表面 ±1cm 内
+  3. 夹爪在终态已松开（gripper qpos > 阈值）
+- [ ] `evaluate_failure_mode()`：返回 `grasp_fail` / `lift_drop` / `place_miss` / `plate_off` / `joint_limit` / `timeout`
+- [ ] 写 MJCF：`assets/scenes/pick_place.xml` `<include>` SO101 + 桌子 + 单 cube + plate
 
 **关键文件**：
-- `sim/envs/pick_place_blue.py`
-- `assets/scenes/pick_place_blue.xml`
+- `sim/envs/pick_place.py`（实现）
+- `assets/scenes/pick_place.xml`（场景）
+- `assets/so101_pick101/`（pick-101 verbatim 移植的 SO101 模型，含 finger_pad/graspframe）
 
 **参考**：
+- pick-101: `https://github.com/ggand0/pick-101`（俯视顶抓 oracle 与模型来源）
 - robosuite 的 `PickPlace` 任务（结构参考，不是直接 import）：`https://github.com/ARISE-Initiative/robosuite/blob/master/robosuite/environments/manipulation/pick_place.py`
 
-**验证**：`env.reset()` + `env.step(zero_action)` 能跑 100 步不崩；红/蓝/plate 三者在视觉上清晰可分
+**验证**：`env.reset()` + `env.step(zero_action)` 能跑 100 步不崩；cube / plate 在 wrist + front 相机里清晰可见
 
 ---
 
@@ -193,8 +196,8 @@
 - [ ] 可选：同时输出 depth
 
 **关键文件**：
-- `assets/scenes/pick_place_blue.xml`（更新 camera）
-- `sim/envs/pick_place_blue.py`（更新 observation）
+- `assets/scenes/pick_place.xml`（更新 camera）
+- `sim/envs/pick_place.py`（更新 observation）
 
 **参考**：
 - MuJoCo camera 文档：`https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-camera`
@@ -224,28 +227,32 @@
 
 ---
 
-### T1.7 实现最小脚本策略（6 阶段）
+### T1.7 实现脚本策略（9 阶段，pick-101 风格俯视顶抓）
 
-**目标**：在仿真里用硬编码策略完成 PickPlaceBlue 全流程
+**目标**：在仿真里用硬编码策略完成 PickPlaceRed 全流程
 
 **步骤**：
-- [ ] 在 `sim/scripted_policies/pick_place_blue.py` 写 6 阶段状态机：
-  1. **APPROACH**：移到 blue cube 上方 10cm
-  2. **DESCEND**：下降到 blue cube 抓取高度
-  3. **GRASP**：闭合夹爪（持续 N 步累积闭合）
-  4. **LIFT**：抬起 12cm（避开桌面与红 cube）
-  5. **TRANSPORT**：水平移动到 plate 上方 10cm
-  6. **PLACE_RELEASE**：下降到 plate 表面上方 3cm → 松开夹爪 → 抬起 5cm 撤离
-- [ ] 每阶段用 IK 求关节目标 + 线性插值
-- [ ] **关键约束**：TRANSPORT 阶段的水平路径要避开红 cube（中间路点高度足够 + 必要时绕行）
-- [ ] policy 直接读 `obs["blue_cube_pos"]` / `obs["plate_pos"]`，不做颜色识别（颜色识别是 VLA 的事；此脚本是 oracle 策略）
+- [ ] 在 `sim/scripted_policies/pick_place.py` 写 9 阶段状态机：
+  1. **HOME**：等待复位
+  2. **APPROACH**：移到 cube 上方 3.5cm（含 `FINGER_WIDTH_OFFSET=-0.015`）
+  3. **DESCEND**：下降到 z=0.020（夹爪 finger_pad 触到 cube 顶）
+  4. **GRASP**：渐进闭合（60 步斜坡）+ 接触检测后保压
+  5. **LIFT**：抬起到 TRANSPORT_Z=0.10
+  6. **TRANSPORT**：水平移到 plate 上方
+  7. **PLACE_DESCEND**：闭环 `target = ee_cur + (desired_cube - cube_obs)` 下降到 plate 表面上方
+  8. **RELEASE**：松开夹爪
+  9. **RETRACT**：抬起撤离
+- [ ] 用 DLS IK（`sim/controllers/ik_dls.py`）锁定 `wrist_flex=π/2`、`wrist_roll`（按 cube 位置同步设定）
+- [ ] cube_anchor / plate_anchor 在首次 `__call__` 时 snapshot，PICK 阶段不再读 obs（避免 chase loop）
+- [ ] 跨 substep 用 `env.ee_target_override` + `env.gripper_action_override` 保持稳定目标
 - [ ] 用 `env.evaluate_success()` 判定成功
 
 **关键文件**：
-- `sim/scripted_policies/pick_place_blue.py`
+- `sim/scripted_policies/pick_place.py`
+- `sim/controllers/ik_dls.py`（locked_joints 读 `data.ctrl[j]` 防止物理漂移污染 ctrl）
 
 **验证**：
-- 跑 100 次随机 reset 的 PickPlaceBlue，成功率 > 70%
+- 跑 100 次随机 reset 的 PickPlaceRed，成功率 ≥ 90%（v21 配置实测 93.8%）
 - 失败模式分布有日志（用于改进 policy）
 
 ---
@@ -256,15 +263,14 @@
 
 **步骤**：
 - [ ] 创建 `sim/randomization/`：
-  - `lighting.py`：随机化光源位置、强度、颜色温度
+  - `lighting.py`：随机化场景里 light0/light1/light2 三个点光源位置、强度
   - `textures.py`：桌面纹理库（10+ 张 procedural / 公开图）
-  - `cube_pose.py`：两个 cube 在左半区的 xy + yaw 随机化（保留最小间距约束）
-  - `plate_pose.py`：plate 在右半区 ±3cm 抖动 + yaw 随机化
+  - `cube_pose.py`：cube 在工作区内 xy + yaw 随机化（yaw 量化到 4 等分）+ plate 位置 ±3cm 抖动
   - `camera_pose.py`：±5cm / ±5° 抖动 front camera
-- [ ] **不要随机化 cube 颜色**：红/蓝是语言锚点，必须固定（否则破坏语义对齐）
+- [ ] **不要随机化 cube 颜色**：红是语言锚点，必须固定（否则破坏语义对齐）
 - [ ] 可选：plate 颜色/纹理可随机（不影响 instruction），增强 sim2real 鲁棒性
 - [ ] 在 `env.reset()` 中按概率调用
-- [ ] 留出 `--no-domain-randomization` 开关用于 debug
+- [ ] 留出 `--no-dr` 开关用于 debug
 
 **关键文件**：
 - `sim/randomization/*.py`
@@ -283,12 +289,12 @@
 **步骤**：
 - [ ] 在 `data/converters/sim_to_lerobot.py` 写一个 writer
 - [ ] 用 T1.7 的脚本策略跑 5 条 episode 并保存为 LeRobot 格式
-- [ ] `task` 字段统一为 `"put the blue cube on the plate"`
+- [ ] `task` 字段从 `data/instructions/pick_place.txt`（含 10+ 条 red-task 同义指令）随机抽
 - [ ] 用 `lerobot-dataset-viz` 验证
 
 **关键文件**：
 - `data/converters/sim_to_lerobot.py`
-- `data/sim_generated/pick_place_blue_v0/`：5 条 episode
+- `data/sim_generated/pick_place_v0/`：5 条 episode
 
 **参考**：
 - LeRobot dataset format：`https://huggingface.co/docs/lerobot/lerobot_dataset`
@@ -299,9 +305,9 @@
 
 ## 验收标准（全部满足后进入 Phase 2）
 
-- [ ] SO-ARM100 在 MuJoCo 中可控、可渲染
-- [ ] PickPlaceBlue 环境实现完整（reset/step/success/失败归因/双相机）
-- [ ] 脚本策略在仿真里 100 次随机 pick-place 成功率 > 70%
+- [ ] SO-ARM101 在 MuJoCo 中可控、可渲染
+- [ ] PickPlaceRed 环境实现完整（reset/step/success/失败归因/双相机）
+- [ ] 脚本策略在仿真里 100 次随机 pick-place 成功率 ≥ 90%（实测 93.8%）
 - [ ] 域随机化模块可独立开关（cube 颜色不参与随机化）
 - [ ] 5 条仿真 episode 已成功导出为 LeRobot 格式并可视化
 
@@ -311,19 +317,20 @@
 
 | 风险 | 应对 |
 |------|------|
-| Menagerie 的 SO-ARM100 模型与真机有几何差异 | 用真机实测的关节限位 / 长度反向校准 MJCF |
-| IK 解奇异时跳变 | mink 加 damping 项；或在策略里把目标位姿限制在工作空间内 |
-| 渲染太慢拖累采集 | 用 `mujoco.MjvOption` 关掉阴影；离屏渲染用 EGL |
-| Domain randomization 太激进导致策略不收敛 | 先在不随机化的环境验证策略，再加 DR |
-| 夹爪在仿真里"抓住"了但物理不稳定 | MJCF 里给 cube 设 friction `1 0.005 0.0001`，给夹爪指尖加软材质 |
+| pick-101 SO101 模型与真机有几何差异 | 用真机实测的关节限位 / 长度反向校准 MJCF；finger_pad 1.25mm 是 sim 假设，真机替换为硅胶垫 |
+| IK 解奇异时跳变 | DLS 阻尼项 + locked_joints 把 wrist 锁住；目标位姿限制在工作空间内 |
+| 渲染太慢拖累采集 | `MUJOCO_GL=egl` 离屏；scene XML 里 `offwidth/offheight` 设到 1920×1080 上限 |
+| Domain randomization 太激进导致策略不收敛 | 先 `--no-dr` 验证策略，再加 DR；DR 维度逐个加入 |
+| 夹爪在仿真里"抓住"了但物理不稳定 | cube friction `0.5 0.05 0.001` + condim=4 + priority=1 让 finger_pad 继承 cube 的高保真摩擦 |
+| 500Hz IK 让成功率 *变差* | sts3215 actuator 严重欠阻尼（ζ≈0.26），IK 比 actuator 还快会引起共振；用 100Hz IK + 跨 substep 锁定目标 |
 
 ---
 
 ## 输出物
 
-- 可用的 SO101 仿真环境（PickCube）
+- 可用的 SO101 仿真环境（PickPlaceRed）
 - 仿真 → LeRobot 数据转换工具
-- 脚本策略 baseline（Phase 2 的种子）
+- 脚本策略 baseline（Phase 2 的种子，成功率 93.8%）
 - 域随机化模块
 
 ---

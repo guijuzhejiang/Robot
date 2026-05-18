@@ -1,7 +1,7 @@
 """Sim → LeRobot dataset converter.
 
 Usage:
-    writer = make_or_resume_dataset(repo_id="local/so101_pickplace_blue_v0", fps=30)
+    writer = make_or_resume_dataset(repo_id="local/so101_pickplace_v0", fps=30)
     for ep in range(N):
         obs, _ = env.reset(seed=ep)
         policy.reset()
@@ -26,12 +26,32 @@ import numpy as np
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 
-def build_features(*, img_height: int = 480, img_width: int = 640) -> dict:
-    """Default LeRobot feature schema for PickPlaceBlue (action_mode='ee').
+_SO101_MOTOR_NAMES = [
+    "shoulder_pan.pos", "shoulder_lift.pos", "elbow_flex.pos",
+    "wrist_flex.pos", "wrist_roll.pos", "gripper.pos",
+]
 
-    Camera height/width are parameterised so callers can request 720p / 1080p
-    captures without forking the schema; LeRobot validates frame shape on
-    every add_frame, so this MUST match what env._compute_obs produces.
+
+def build_features(*, img_height: int = 480, img_width: int = 640) -> dict:
+    """Default LeRobot feature schema for SO-101 PickPlaceRed.
+
+    Conforms to the LeRobot SO-100/101 community convention used by SmolVLA
+    pretraining and by `lerobot-record` real-robot teleop: the `action`
+    column holds 6-dim joint position targets (radians for arm + qpos for
+    gripper), motor names suffixed with `.pos` to match the leader-arm
+    `get_action()` output format.
+
+    The auxiliary `ee_action` column (4-dim ee-delta + gripper, normalized
+    [-1, 1]) is a sim-only debugging artifact — it has no real-teleop
+    counterpart and is NOT used by mainstream pretrained VLAs. It is
+    retained for: (a) sim trajectory audit / visualization, (b) future
+    derive-tool that converts to ee-mode formats (OpenVLA / X-VLA style)
+    via FK from `observation.state`.
+
+    Camera height/width are parameterised so callers can request 720p /
+    1080p captures without forking the schema; LeRobot validates frame
+    shape on every add_frame, so this MUST match what env._compute_obs
+    produces.
     """
     return {
         "observation.images.front": {
@@ -47,9 +67,26 @@ def build_features(*, img_height: int = 480, img_width: int = 640) -> dict:
         "observation.state": {
             "dtype": "float32",
             "shape": (6,),
-            "names": [f"q{i}" for i in range(6)],
+            "names": _SO101_MOTOR_NAMES,
         },
+        # PRIMARY action label. 6-dim joint position targets — directly
+        # compatible with SmolVLA / ACT / Diffusion Policy / Pi-0 family
+        # pretraining; matches what `lerobot-record` SO-101 teleop produces.
+        # Recorded from `env.data.ctrl[:6]` snapshot post-step. Units:
+        # radians for 5 arm joints + qpos for gripper. NOT normalized
+        # (LeRobot stats.json computes mean/std automatically).
         "action": {
+            "dtype": "float32",
+            "shape": (6,),
+            "names": _SO101_MOTOR_NAMES,
+        },
+        # SIM-ONLY auxiliary label. 4-dim ee-delta + gripper, normalized
+        # [-1, 1] (×EE_DELTA_SCALE=0.05m → meters). Not produced by real
+        # teleop and not directly compatible with any major pretrained VLA.
+        # Useful for: (a) sim audit, (b) Stage-2 derive tool that expands
+        # to ee-pose / ee-delta-with-rotation formats for OpenVLA / X-VLA
+        # experiments via FK from observation.state.
+        "ee_action": {
             "dtype": "float32",
             "shape": (4,),
             "names": ["dx", "dy", "dz", "gripper"],
@@ -115,12 +152,26 @@ class DatasetWriter:
         action: np.ndarray,
         *,
         task: str,
+        ee_action: np.ndarray | None = None,
     ) -> None:
+        """Write one frame.
+
+        `action`     — PRIMARY label, shape (6,), joint position targets
+                       (radians for 5 arm joints + qpos for gripper). This
+                       is the column SmolVLA / ACT / Diffusion Policy and
+                       LeRobot real-robot teleop all expect.
+        `ee_action`  — SIM-ONLY auxiliary, shape (4,), ee-delta normalized
+                       [-1, 1] + gripper. If None, falls back to zeros —
+                       acceptable for any caller that doesn't compute it.
+        """
+        if ee_action is None:
+            ee_action = np.zeros(4, dtype=np.float32)
         self.ds.add_frame({
             "observation.images.front": obs["image_front"],
             "observation.images.wrist": obs["image_wrist"],
             "observation.state": obs["arm_qpos"].astype("float32"),
             "action": np.asarray(action, dtype=np.float32),
+            "ee_action": np.asarray(ee_action, dtype=np.float32),
             "task": task,
         })
 

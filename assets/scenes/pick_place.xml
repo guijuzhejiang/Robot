@@ -1,4 +1,4 @@
-<mujoco model="pick_place_blue">
+<mujoco model="pick_place">
   <!--
     PickPlace scene rebuilt on top of pick-101's SO-101 model
     (ggand0/pick-101 lift_cube.xml). Single 3 cm red cube + freejoint

@@ -2,9 +2,9 @@
 
 **周期**：2–3 周
 **前置依赖**：Phase 5 完成（v2 模型已部署真机，失败模式已归类）
-**目标**：用 LeRobot 官方 HIL（Human-In-the-Loop）pipeline，针对 Phase 5 暴露的失败模式专门采集 **recovery + correction** 数据，与原 dataset 合并做 co-finetune，把真机 PickPlaceBlue 成功率从 60% 推到 80%+，颜色锚定准确率推到 95%+
+**目标**：用 LeRobot 官方 HIL（Human-In-the-Loop）pipeline，针对 Phase 5 暴露的失败模式专门采集 **recovery + correction** 数据，与原 dataset 合并做 co-finetune，把真机 PickPlaceRed 成功率从 60% 推到 80%+
 
-> **核心任务**：抓蓝 cube 放进 plate（红 cube 是干扰物）。详细规约见 [README.md](README.md)。
+> **核心任务**：把红 cube 放进 plate。详细规约见 [README.md](README.md)。
 
 ---
 
@@ -130,15 +130,15 @@ START
 
 **步骤**：
 - [ ] 读 `eval/results/real_v1_baseline.md` 和 T5.4 失败分析，按频次排序失败模式
-- [ ] 对 PickPlaceBlue 任务，按经验**目标采集量**：
+- [ ] 对 PickPlaceRed 任务，按经验**目标采集量**：
   | 失败模式 | 推荐 HIL episode 数 | 触发场景设计 |
   |---------|---------------------|--------------|
-  | `color_confusion`（抓红） | 30 | 红 cube 比蓝 cube 离机械臂更近的几种摆放 |
-  | `transport_hit_red` | 20 | 红 cube 摆在蓝 → plate 直线路径上 |
-  | `place_miss` | 20 | plate 在工作区边缘 / plate 颜色与桌布接近 |
-  | `grasp_fail` | 15 | 蓝 cube yaw 接近 ±45°（夹爪难对准） |
-  | `lift_drop` | 10 | 蓝 cube 表面打磨光滑 / 加涂层 |
-  | **总计** | **~95** | |
+  | `grasp_fail` | 35 | cube yaw 接近 ±π/4 边界 / 工作区边缘 |
+  | `place_miss` | 25 | plate 在工作区边缘 / plate 颜色与桌布接近 |
+  | `lift_drop` | 15 | cube 表面打磨光滑 / 加涂层 |
+  | `plate_off` | 15 | cube 释放高度太高反弹弹出 |
+  | `joint_limit` | 10 | 极端 cube/plate 位置触发关节限位 |
+  | **总计** | **~100** | |
 - [ ] **不要均匀采集**：v2 模型最差的失败模式权重最高（80/20 法则）
 - [ ] 写采集计划 `eval/hil/collection_plan_v3.md`：每个场景几条、谁来采、何时采
 
@@ -169,8 +169,8 @@ START
       --teleop.type=so_leader \
       --teleop.port=/dev/ttyUSB1 \
       --policy.path=training/checkpoints/pi05_so101_v2/last/pretrained_model \
-      --dataset.repo_id=local/so101_pickplace_blue_hil_v3 \
-      --dataset.single_task="put the blue cube on the plate" \
+      --dataset.repo_id=local/so101_pickplace_hil_v3 \
+      --dataset.single_task="put the red cube on the plate" \
       --dataset.fps=30 \
       --dataset.episode_time_s=60 \
       --dataset.num_episodes=100 \
@@ -178,7 +178,7 @@ START
   ```
 
 - [ ] **采集纪律**：
-  - 每条 episode 开始前按 T6.2 计划摆好红/蓝/plate
+  - 每条 episode 开始前按 T6.2 计划摆好 cube / plate
   - **只在临界点介入**：不要因为"看起来不够流畅"就接管（否则 dataset 全是人类轨迹，HIL 失去意义）
   - Recovery 要把机器人摇回**像 demo 一样的姿态**才放手（in-distribution）
   - Correction 要果断，3–5 秒完成 subtask 即可
@@ -186,7 +186,7 @@ START
 - [ ] **录像**：另开一个手机相机录全程，事后可视化 review
 
 **关键文件**：
-- `data/real_demos/so101_pickplace_blue_hil_v3/`
+- `data/real_demos/so101_pickplace_hil_v3/`
 - `eval/recordings/hil_v3/`
 
 **验证**：
@@ -212,7 +212,7 @@ START
 **关键文件**：
 - `data/hil_adapter/audit.py`
 - `data/hil_adapter/annotate_segments.py`
-- `data/real_demos/so101_pickplace_blue_hil_v3/audit.md`
+- `data/real_demos/so101_pickplace_hil_v3/audit.md`
 
 **验证**：
 - 抽检 20 条中 ≥ 18 条 intervention 段从 "失败临界" 状态起步
@@ -227,7 +227,7 @@ START
 **步骤**：
 - [ ] 写 `training/configs/{pi05|smolvla}_so101_v3.yaml`：
   - `pretrained_path` = v2 checkpoint（warm start）
-  - `dataset.repo_id` = 合并 dataset：原 `so101_pickplace_blue_mixed_v1` + `so101_real_pickplace_blue_targeted_v1`（Phase 5）+ **`so101_pickplace_blue_hil_v3`（新加）**
+  - `dataset.repo_id` = 合并 dataset：原 `so101_pickplace_mixed_v1` + `so101_real_pickplace_targeted_v1`（Phase 5）+ **`so101_pickplace_hil_v3`（新加）**
   - HIL data 采样权重 **5–8×**（这是 v3 的核心信号，不要被淹没）
   - lr 进一步降到 v2 的 1/2（已经接近收敛）
   - epochs = 2（避免过拟合到 HIL）
@@ -243,7 +243,7 @@ START
 - LeRobot fine-tune 命令：
   ```bash
   python src/lerobot/scripts/lerobot_train.py \
-      --dataset.repo_id=local/so101_pickplace_blue_combined_v3 \
+      --dataset.repo_id=local/so101_pickplace_combined_v3 \
       --policy.type=pi0 \
       --policy.pretrained_path=training/checkpoints/pi05_so101_v2/last/pretrained_model \
       --output_dir=training/checkpoints/pi05_so101_v3 \
@@ -259,15 +259,16 @@ START
 **目标**：量化 HIL 微调真的修复了 Phase 5 的失败模式
 
 **步骤**：
-- [ ] 完全复用 Phase 5 T5.3 的评估 setup（30 次试验 + 4 象限 + 颜色锚定测试）
+- [ ] 完全复用 Phase 5 T5.3 的评估 setup（30 次试验 + 4 象限 + yaw 多样性）
 - [ ] 跑 v3 评估，按相同失败模式枚举统计
 - [ ] 写 `eval/results/real_v3_eval.md`，表格对比 v2 vs v3：
   | 失败模式 | v2 (Phase 5) | v3 (Phase 6 round 1) | Δ |
   |---------|--------------|----------------------|---|
   | 总成功率 | X/30 | Y/30 | |
-  | color_confusion | a | b | |
-  | transport_hit_red | c | d | |
-  | place_miss | e | f | |
+  | grasp_fail | a | b | |
+  | place_miss | c | d | |
+  | lift_drop | e | f | |
+  | plate_off | g | h | |
   | ... | | | |
 - [ ] 若某类失败**没下降**：说明该类 HIL 数据采少了 / 质量不够，回到 T6.2 调整
 
@@ -276,7 +277,6 @@ START
 
 **验证**：
 - v3 总成功率 > v2 至少 10 个百分点
-- 颜色锚定准确率 > 90%
 - 没有出现新的退化失败模式
 
 ---
@@ -300,9 +300,9 @@ START
 **关键文件**：
 - `training/checkpoints/<model>_so101_v4/`、`v5/`
 - `eval/results/real_v{4,5}_eval.md`
-- `data/real_demos/so101_pickplace_blue_hil_v{4,5}/`
+- `data/real_demos/so101_pickplace_hil_v{4,5}/`
 
-**验证**：v5（或停止点版本）真机成功率 > 80%，颜色锚定 > 95%
+**验证**：v5（或停止点版本）真机成功率 > 80%
 
 ---
 
@@ -358,12 +358,12 @@ START
 - [ ] 在 `data/hil_adapter/manifest.py` 维护 dataset 谱系：
   ```yaml
   v3_combined:
-    base: so101_pickplace_blue_mixed_v1
-    + so101_real_pickplace_blue_targeted_v1
-    + so101_pickplace_blue_hil_v3 (weight=5x)
+    base: so101_pickplace_mixed_v1
+    + so101_real_pickplace_targeted_v1
+    + so101_pickplace_hil_v3 (weight=5x)
   v4_combined:
     base: v3_combined
-    + so101_pickplace_blue_hil_v4 (weight=5x)
+    + so101_pickplace_hil_v4 (weight=5x)
   ...
   ```
 - [ ] 每个 checkpoint 在 `training/checkpoints/<v>/manifest.yaml` 记录：
@@ -371,7 +371,7 @@ START
   - 训练超参
   - sim_eval + 真机 eval 结果
   - 失败模式分布
-- [ ] 推 winner 到 HF Hub：`<your_id>/so101_pickplace_blue_v3` / `_v4` / `_v5`
+- [ ] 推 winner 到 HF Hub：`<your_id>/so101_pickplace_v3` / `_v4` / `_v5`
 
 **关键文件**：
 - `data/hil_adapter/manifest.py`
@@ -386,7 +386,7 @@ START
 - [ ] HIL pipeline 跑通，至少完成 1 轮（T6.3 + T6.5 + T6.6）
 - [ ] v3 真机成功率比 v2 提升 ≥ 10 个百分点
 - [ ] 至少完成 2 轮迭代（v3 + v4），或迭代收敛（边际收益 < 3%）
-- [ ] 终版模型真机 PickPlaceBlue 成功率 > 80%，颜色锚定 > 95%
+- [ ] 终版模型真机 PickPlaceRed 成功率 > 80%
 - [ ] RaC 消融实验报告完成（recovery vs correction 拆解）
 - [ ] dataset 谱系与 checkpoint manifest 齐全
 
@@ -400,7 +400,7 @@ START
 | 介入太少，HIL 段太短没信号 | 反过来：把 v2 模型放到更难的 setup（边缘位置 / 紧邻物体），自然多失败多介入 |
 | Recovery 段质量差（人也手抖） | 多人采集 / 同一操作员先练 20 条再正式采；不熟练的 recovery 比没有更糟 |
 | HIL 数据权重过高，原 demo 分布被压制 | 5–8× 上限；同时保留全部原 dataset；用 sim_eval 监控 demo 任务有无退化 |
-| 颜色锚定在 HIL 后反而变差 | HIL 数据语义全是"抓蓝"，强化了颜色信号，**正常应增强**；若变差，检查 dataset 是否混入了误标签 |
+| HIL 数据让某些 yaw 角性能变差 | 检查 HIL 数据 yaw 分布是否过度集中（偏向某一类失败模式），保持各 yaw 角覆盖均衡 |
 | 多轮迭代后过拟合到评估 setup | 评估 setup 每 2 轮换一次（同任务，但物体位置 / 光照变） |
 | 推理延迟造成介入瞬间机器人冲过头 | 启用 RTC + `interpolation_multiplier=3`；pause 触发时 follower 立即 freeze（torque hold） |
 | 踏板抽风（短按被识别成长按） | 用 evtest 校准 debounce；或换有源踏板 |

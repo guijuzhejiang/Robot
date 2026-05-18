@@ -9,10 +9,10 @@ metadata for the trainer.
 
 CLI:
     python -m data.converters.merge_datasets \\
-        --source local/so101_real_pickplace_blue_v0:real \\
+        --source local/so101_real_pickplace_v0:real \\
         --source local/so101_sim_mimicgen_v1:sim_mimicgen \\
-        --source local/so101_pickplace_blue_v1:sim_scripted \\
-        --output-repo-id local/so101_pickplace_blue_mixed_v1
+        --source local/so101_pickplace_v1:sim_scripted \\
+        --output-repo-id local/so101_pickplace_mixed_v1
 """
 from __future__ import annotations
 

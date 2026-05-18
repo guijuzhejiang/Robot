@@ -1,4 +1,4 @@
-"""Scripted oracle policy for PickPlaceBlue (rebuilt on pick-101 pattern).
+"""Scripted oracle policy for PickPlace (rebuilt on pick-101 pattern).
 
 Task: pick the single 3 cm red cube and place it on the white plate.
 This policy mirrors ggand0/pick-101 `test_topdown_pick.py` for the pick
@@ -6,7 +6,7 @@ half (steps 1-4) and adds 4 place phases (transport/descend/release/retract).
 
 Why pick-101's pattern works:
   - Initial wrist pose has wrist_flex = wrist_roll = pi/2 (set by the home
-    keyframe in pick_place_blue.xml), so the fixed jaw points straight DOWN.
+    keyframe in pick_place.xml), so the fixed jaw points straight DOWN.
   - The env's DlsIkController runs with `locked_joints = [3, 4]`, so IK only
     moves base/shoulder/elbow for XYZ — the wrist NEVER drifts.
   - Gripper actions are absolute (env.gripper_action_mode = "absolute"),
@@ -96,11 +96,11 @@ class _Constants:
     TIGHTEN_AMOUNT: float = 0.4            # extra close after contact
 
 
-class PickPlaceBluePolicy:
+class PickPlacePolicy:
     """Scripted oracle. Call `policy(env, obs)` each env step.
 
-    The historical name (`PickPlaceBluePolicy`) is kept so collectors and
-    pipelines don't need renames; the underlying task is now red-cube only.
+    Color-agnostic name (`PickPlacePolicy`); the underlying task is currently
+    red-cube only but the policy logic doesn't depend on color.
     """
 
     def __init__(self, *, max_speed: float | None = None, descend_speed: float | None = None):

@@ -2,9 +2,10 @@
 
 **周期**：2 周
 **前置依赖**：Phase 0（真机控制）+ Phase 2（仿真数据 pipeline）完成
-**目标**：在真机上采集 100 条高质量 **PickPlaceBlue** demo，并把这些 demo 作为"种子"用 MimicGen 思路在仿真中扩增到 5K–10K 条，最终形成可用于 VLA 微调的混合数据集
+**目标**：在真机上采集 100 条高质量 **PickPlaceRed** demo，并把这些 demo 作为"种子"用 MimicGen 思路在仿真中扩增到 5K–10K 条，最终形成可用于 VLA 微调的混合数据集
 
-> **核心任务**：抓蓝 cube 放进 plate（红 cube 是干扰物）。详细规约见 [README.md](README.md)。
+> **核心任务**：把红 cube 放进 plate。详细规约见 [README.md](README.md)。
+> **命名约定**：仿真侧文件统一使用颜色无关命名 `data/instructions/pick_place.txt`、`assets/scenes/pick_place.xml` 等，便于扩展到其他颜色任务。
 
 ---
 
@@ -16,11 +17,11 @@
 | 想做的事 | 一行命令 | 产出 |
 |---------|---------|------|
 | **冒烟测试整个 MimicGen 流水线（不依赖真机，用脚本策略合成种子）** | `python -m data.mimicgen_adapter.augment --from-sim-seeds 5 --output-repo-id local/so101_sim_mimicgen_smoke --n-per-demo 10` | dataset + 控制台显示成功率统计 |
-| 真机 demo 采集（T3.2，需要硬件，本仓库未实现录制 GUI——使用 LeRobot 官方工具） | `python -m lerobot.scripts.control_robot record --robot.type so101 --control.fps 30 ...`（参数见 LeRobot 文档） | `local/so101_real_pickplace_blue_v0` |
-| **正式扩增（T3.5，从真机种子展开到 5K-10K 条仿真 episode）** | `python -m data.mimicgen_adapter.augment --source-repo-id local/so101_real_pickplace_blue_v0 --output-repo-id local/so101_sim_mimicgen_v1 --n-per-demo 50` | `local/so101_sim_mimicgen_v1`（注：`--source-repo-id` 路径目前为 `NotImplementedError`，需先实现真机 demo→SegmentedDemo 反演；smoke 路径 `--from-sim-seeds` 可用） |
-| 合并 real + sim_mimicgen + sim_scripted 三源（T3.6） | `python -m data.converters.merge_datasets --source local/so101_real_pickplace_blue_v0:real --source local/so101_sim_mimicgen_v1:sim_mimicgen --source local/so101_pickplace_blue_v1:sim_scripted --output-repo-id local/so101_pickplace_blue_mixed_v1` | 单一 dataset，含 `source` tag |
-| 语言指令 ×K 扩展（T3.7） | `python -m data.converters.expand_instructions --source-repo-id local/so101_real_pickplace_blue_v0 --output-repo-id local/so101_real_pickplace_blue_v0_langx3 --instructions data/instructions/pick_place_blue.txt --copies 3` | `..._langx3` dataset |
-| 扩增质量审计（T3.8，含 per-source 统计） | `python -m eval.audit_dataset --repo-id local/so101_pickplace_blue_mixed_v1 --n-sample 100 --out-dir runs/audit_mixed` | 控制台 + markdown 报告 |
+| 真机 demo 采集（T3.2，需要硬件，本仓库未实现录制 GUI——使用 LeRobot 官方工具） | `python -m lerobot.scripts.control_robot record --robot.type so101 --control.fps 30 ...`（参数见 LeRobot 文档） | `local/so101_real_pickplace_v0` |
+| **正式扩增（T3.5，从真机种子展开到 5K-10K 条仿真 episode）** | `python -m data.mimicgen_adapter.augment --source-repo-id local/so101_real_pickplace_v0 --output-repo-id local/so101_sim_mimicgen_v1 --n-per-demo 50` | `local/so101_sim_mimicgen_v1`（注：`--source-repo-id` 路径目前为 `NotImplementedError`，需先实现真机 demo→SegmentedDemo 反演；smoke 路径 `--from-sim-seeds` 可用） |
+| 合并 real + sim_mimicgen + sim_scripted 三源（T3.6） | `python -m data.converters.merge_datasets --source local/so101_real_pickplace_v0:real --source local/so101_sim_mimicgen_v1:sim_mimicgen --source local/so101_pickplace_v1:sim_scripted --output-repo-id local/so101_pickplace_mixed_v1` | 单一 dataset，含 `source` tag |
+| 语言指令 ×K 扩展（T3.7） | `python -m data.converters.expand_instructions --source-repo-id local/so101_real_pickplace_v0 --output-repo-id local/so101_real_pickplace_v0_langx3 --instructions data/instructions/pick_place.txt --copies 3` | `..._langx3` dataset |
+| 扩增质量审计（T3.8，含 per-source 统计） | `python -m eval.audit_dataset --repo-id local/so101_pickplace_mixed_v1 --n-sample 100 --out-dir runs/audit_mixed` | 控制台 + markdown 报告 |
 
 **入口与任务清单的对应关系**：
 
@@ -55,15 +56,15 @@
 
 **MimicGen 核心思想**（必须理解）：
 1. 给定一条人类 demo（end-effector 在世界系下的位姿序列）
-2. 按"物体交互边界"切成 N 段：**对 pick-place 任务来说 = approach_blue / grasp / transport / place**
+2. 按"物体交互边界"切成 N 段：**对 pick-place 任务来说 = approach / grasp / transport / place**
 3. 在新场景里，把对应物体的新姿态变换矩阵作用于各段：
-   - `approach_blue` + `grasp` 段：以 blue cube 新姿态为锚
+   - `approach` + `grasp` 段：以 cube 新姿态为锚
    - `transport` 段：插值连接
    - `place` 段：以 plate 新姿态为锚
 4. 再用 IK 重放并验证物理可行性，成功则保存
 5. 一条种子可扩增到 10–100 条
 
-**多锚点变换的额外要求**：transport 段不能简单线性插值——必须保证中间路径不撞红 cube。扩增时若新场景红 cube 落在原 transport 路径上，需要绕行重规划，否则丢弃此 trial。
+**单锚点对的注意事项**：transport 段只需保证不撞机械臂自身或桌面（无干扰物）。但当 cube 与 plate 极近时可能直接 0 段 transport。
 
 ---
 
@@ -75,12 +76,12 @@
 
 **步骤**：
 - [ ] 在桌面贴 ChArUco 板，记录桌面 (0,0,0) 相对机械臂 base 的 transform
-- [ ] 把同样的 transform 写入仿真 MJCF（更新 `assets/scenes/pick_place_blue.xml`）
+- [ ] 把同样的 transform 写入仿真 MJCF（更新 `assets/scenes/pick_place.xml`）
 - [ ] 把真机 front camera 的 extrinsic 量到，写入 `configs/cameras.yaml`
 
 **关键文件**：
 - `configs/world_frame.yaml`：桌面 / camera / robot base 的统一坐标
-- `assets/scenes/pick_place_blue.xml`：仿真同步更新
+- `assets/scenes/pick_place.xml`：仿真同步更新
 
 **参考**：
 - OpenCV ChArUco 标定教程
@@ -89,31 +90,31 @@
 
 ---
 
-### T3.2 真机 PickPlaceBlue demo 采集
+### T3.2 真机 PickPlaceRed demo 采集
 
 **目标**：采集 100 条高质量真机 demo
 
 **步骤**：
-- [ ] 准备：1 红 cube + 1 蓝 cube（边长 3–5cm）+ 1 plate（直径 12–15cm）
-- [ ] 每条 demo 前手动**重新摆放**：红/蓝 cube 在工作区左半区随机散布（最小间距 8cm），plate 在右半区
-- [ ] **多样性要求**：100 条 demo 中红/蓝相对位置覆盖 4 个象限（左红右蓝、左蓝右红、上红下蓝、上蓝下红）各 ≥ 20 条
-- [ ] 用 leader-follower 遥操，每条 demo 30s 以内
-- [ ] 命令：`lerobot-record --robot.type=so101_follower --teleop.type=so101_leader --dataset.repo_id=local/so101_real_pickplace_blue_v0 --dataset.num_episodes=100 --dataset.single_task="put the blue cube on the plate"`
-- [ ] 失败 demo 当场删除（包括误碰红 cube、blue 没进 plate 等）
+- [ ] 准备：1 红 cube（边长 3cm）+ 1 plate（直径 12cm）
+- [ ] 每条 demo 前手动**重新摆放**：cube 与 plate 在工作区不同位置随机散布
+- [ ] **多样性要求**：100 条 demo 中 cube 位置覆盖工作区左/右/前/后各 ≥ 20 条，每种 cube yaw（0/π/2/π/3π/2）各 ≥ 20 条
+- [ ] 用 leader-follower 遥操，每条 demo 15s 以内
+- [ ] 命令：`lerobot-record --robot.type=so101_follower --teleop.type=so101_leader --dataset.repo_id=local/so101_real_pickplace_v0 --dataset.num_episodes=100 --dataset.single_task="put the red cube on the plate"`
+- [ ] 失败 demo 当场删除（cube 没进 plate / 抓不起来等）
 
 **关键文件**：
-- `data/real_demos/so101_real_pickplace_blue_v0/`
+- `data/real_demos/so101_real_pickplace_v0/`
 
 **验证**：
 - 100 条成功 episode
-- 红/蓝相对位置覆盖均匀（4 象限）
-- 100% episode 末态：blue 在 plate 上 + red 位移 < 2cm
-- 平均时长 10–20 秒（比纯 pick 多 transport+place 阶段）
+- cube 位置 + yaw 覆盖均匀
+- 100% episode 末态：cube 在 plate 上
+- 平均时长 8–15 秒
 
 **采集 tips**：
 - 不要每次都从同一个 home pose 开始
-- 不要全部用同一种抓取角度
-- transport 阶段要让 ee 明显抬高（避免视觉上掠过红 cube）
+- 不要全部用同一种抓取角度（用 yaw 多样性反映 cube 4 重对称）
+- transport 阶段保持合理高度
 - place 时夹爪松开要果断，不要在 plate 上方犹豫
 
 ---
@@ -126,17 +127,16 @@
 - [ ] 在 `data/mimicgen_adapter/segmenter.py` 实现：
   - 输入：一条 episode（ee 轨迹 + 夹爪开合状态 + 物体姿态 from sim 或推断）
   - 边界检测：
-    - 夹爪**闭合**点（pick）→ approach_blue / grasp 边界
+    - 夹爪**闭合**点（pick）→ approach / grasp 边界
     - ee 高度上升超过阈值 → grasp / transport 边界
     - 夹爪**张开**点（place）→ transport / place_release 边界
-  - 输出：`[approach_blue, grasp, transport, place_release]` 4 段
-  - 每段标注 **anchor object**：approach_blue & grasp → blue；transport → 无锚点（自由插值）；place_release → plate
-- [ ] 真机数据缺少物体姿态 → 用红/蓝颜色掩膜 + plate 颜色/形状掩膜从 front camera 估算 2D 位置 → 投影回桌面平面
-- [ ] **干扰物追踪**：同时追踪红 cube 的位置（用于 T3.4 transport 段避碰检测）
+  - 输出：`[approach, grasp, transport, place_release]` 4 段
+  - 每段标注 **anchor object**：approach & grasp → cube；transport → 无锚点（自由插值）；place_release → plate
+- [ ] 真机数据缺少物体姿态 → 用红色掩膜（HSV）+ plate 颜色/形状掩膜从 front camera 估算 2D 位置 → 投影回桌面平面
 
 **关键文件**：
 - `data/mimicgen_adapter/segmenter.py`
-- `data/mimicgen_adapter/object_tracker.py`：从图像追踪红/蓝 cube + plate 位置
+- `data/mimicgen_adapter/object_tracker.py`：从图像追踪红 cube + plate 位置
 
 **参考**：
 - MimicGen 论文 §3.2 "object-centric subtask segmentation"
@@ -152,13 +152,13 @@
 
 **步骤**：
 - [ ] 在 `data/mimicgen_adapter/replayer.py` 实现：
-  - 输入：分好段的 demo + 新场景（新 blue cube / 新 plate / 新 red cube 姿态）
+  - 输入：分好段的 demo + 新场景（新 cube / 新 plate 姿态）
   - 各段独立应用变换：
-    - `approach_blue` / `grasp`：`T_new = T_new_blue × T_old_blue^-1 × T_segment`
+    - `approach` / `grasp`：`T_new = T_new_cube × T_old_cube^-1 × T_segment`
     - `transport`：起点接上一段终点，终点接下一段起点（B-spline 插值或线性 + 高度抬升）
     - `place_release`：`T_new = T_new_plate × T_old_plate^-1 × T_segment`
   - 用 IK 解关节序列，在仿真中执行
-  - 检查：碰撞、关节限位、**transport 段是否撞红 cube**、成功标志
+  - 检查：碰撞、关节限位、成功标志
 - [ ] 失败的扩增样本自动丢弃，失败原因记录
 
 **关键文件**：
@@ -167,7 +167,7 @@
 **参考**：
 - MimicGen `mimicgen/datagen/datagen_utils.py`
 
-**验证**：拿真机 demo，在仿真随机化 100 次新场景（新红/蓝/plate 位置），成功 replay ≥ 50 条；其中"撞红 cube"占失败比例需 < 30%
+**验证**：拿真机 demo，在仿真随机化 100 次新场景（新 cube/plate 位置），成功 replay ≥ 50 条
 
 ---
 
@@ -209,11 +209,11 @@
   - 输入：N 个 LeRobotDataset
   - 输出：合并后 dataset，保留每个 episode 的 `source` 字段（"real" / "sim_mimicgen" / "sim_scripted"）
   - 比例建议（v1）：100 real + 5K mimicgen + 5K scripted = 10.1K 条
-- [ ] 推 HF Hub：`<your_id>/so101_pickplace_blue_mixed_v1`
+- [ ] 推 HF Hub：`<your_id>/so101_pickplace_mixed_v1`
 
 **关键文件**：
 - `data/converters/merge_datasets.py`
-- `data/lerobot/so101_pickplace_blue_mixed_v1/`
+- `data/lerobot/so101_pickplace_mixed_v1/`
 
 **参考**：
 - LeRobot dataset merging：`https://huggingface.co/docs/lerobot/lerobot_dataset#merging-datasets`
@@ -229,13 +229,13 @@
 **目标**：真机指令与仿真指令分布一致
 
 **步骤**：
-- [ ] 把 Phase 2 的 `data/instructions/pick_place_blue.txt` 复用
+- [ ] 把 Phase 2 的 `data/instructions/pick_place.txt`（内容是 red 任务指令）复用
 - [ ] 给真机 demo 后处理：每条 episode 随机选 3 种指令变体生成 3 个语言副本（仅复制 task 字段，frame 数据共享）
 - [ ] 仿真扩增数据沿用相同指令池
-- [ ] **颜色锚定一致**：所有 instruction 都以 "blue" 为目标，不混入其他颜色（避免语义噪声）
+- [ ] **颜色锚定一致**：所有 instruction 都以 "red" 为目标，不混入其他颜色（避免语义噪声）
 
 **关键文件**：
-- `data/instructions/pick_place_blue.txt`
+- `data/instructions/pick_place.txt`
 - `data/converters/expand_instructions.py`
 
 **验证**：dataset 内 task 字段直方图，真机 / sim 分布相近
@@ -262,9 +262,9 @@
 
 ## 验收标准（全部满足后进入 Phase 4）
 
-- [ ] 100 条高质量真机 demo（红/蓝相对位置 4 象限均匀覆盖）
+- [ ] 100 条高质量真机 demo（cube 位置 + yaw 均匀覆盖）
 - [ ] 真机-仿真坐标系标定一致
-- [ ] MimicGen pipeline 成功扩增 ≥ 5000 条仿真 episode（含 transport 避碰）
+- [ ] MimicGen pipeline 成功扩增 ≥ 5000 条仿真 episode
 - [ ] 合并 dataset 总量 ≥ 10K 条，多指令变体覆盖
 - [ ] 质量审计通过率 ≥ 95%
 - [ ] dataset 已推送 HF Hub

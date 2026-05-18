@@ -1,10 +1,9 @@
-"""PickPlaceBlue env (rebuilt on pick-101 SO-101 model).
+"""PickPlace env (rebuilt on pick-101 SO-101 model).
 
 Task simplification (vs. legacy 2-cube version): a SINGLE 3 cm red cube is
 the pick target. A white cylindrical plate (freejoint, can be nudged) is the
-place target. The class/file name keeps the historical 'blue' prefix to
-avoid renaming downstream consumers (collectors, DR modules, mimicgen
-adapter, training configs), but the cube is red and there is no distractor.
+place target. The class/file name is color-agnostic (`PickPlace`) so it
+remains valid if the cube color changes in future variants.
 
 Why this rewrite — the menagerie SO-101 grasp tuning capped at ~26 % success
 because that model lacks finger pads, graspframe, and per-fingertip sites,
@@ -48,8 +47,8 @@ from sim.envs.base import BaseSoArmEnv
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-class PickPlaceBlueEnv(BaseSoArmEnv):
-    SCENE_PATH = str(REPO_ROOT / "assets" / "scenes" / "pick_place_blue.xml")
+class PickPlaceEnv(BaseSoArmEnv):
+    SCENE_PATH = str(REPO_ROOT / "assets" / "scenes" / "pick_place.xml")
     DEFAULT_CAMERA = "front"
 
     # Geometry constants (must match the MJCF).

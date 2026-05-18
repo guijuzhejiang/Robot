@@ -8,9 +8,9 @@ This is a CHEAP way to multiply language diversity without re-running sim.
 
 CLI:
     python -m data.converters.expand_instructions \\
-        --source-repo-id local/so101_real_pickplace_blue_v0 \\
-        --output-repo-id local/so101_real_pickplace_blue_v0_langx3 \\
-        --instructions data/instructions/pick_place_blue.txt \\
+        --source-repo-id local/so101_real_pickplace_v0 \\
+        --output-repo-id local/so101_real_pickplace_v0_langx3 \\
+        --instructions data/instructions/pick_place.txt \\
         --copies 3
 """
 from __future__ import annotations
@@ -106,7 +106,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source-repo-id", required=True)
     ap.add_argument("--output-repo-id", required=True)
-    ap.add_argument("--instructions", default="data/instructions/pick_place_blue.txt")
+    ap.add_argument("--instructions", default="data/instructions/pick_place.txt")
     ap.add_argument("--copies", type=int, default=3)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()

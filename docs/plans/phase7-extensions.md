@@ -2,9 +2,9 @@
 
 **周期**：持续（按兴趣 / 课题选做）
 **前置依赖**：Phase 6 完成（v3+ 模型经 HIL recovery/correction 微调后真机鲁棒可用）
-**目标**：把 PickPlaceBlue（双 cube + 单 plate + 颜色锚定）能力进一步扩展到 N 物体场景、多步骤复合指令、多容器选择、更复杂场景，并探索 real2sim 与世界模型的前沿方向
+**目标**：把 PickPlaceRed（单 cube + 单 plate）能力进一步扩展到 N 物体场景、多颜色多干扰、多步骤复合指令、多容器选择、更复杂场景，并探索 real2sim 与世界模型的前沿方向
 
-> **主路径已覆盖**：单干扰物（红）+ 单容器（plate）+ 单步 pick-place + 颜色锚定 + HIL 鲁棒化。Phase 7 在此基础上加复杂度。
+> **主路径已覆盖**：单 cube + 单容器（plate）+ 单步 pick-place + 俯视顶抓 + HIL 鲁棒化。Phase 7 在此基础上加复杂度。
 > **Phase 6 的 HIL 方法可在每个新任务上重复使用**——每扩展一个能力，跑一轮 HIL 吃掉新失败模式。
 
 ---
@@ -15,13 +15,13 @@
 
 | 子方向 | 复用入口 | 需要新增的资产 |
 |-------|---------|--------------|
-| 新颜色 / 多干扰物（如绿 cube） | `parallel_runner` + 新 MJCF | `assets/scenes/pick_place_<task>.xml`、`data/instructions/<task>.txt`、`sim/envs/<task>.py` |
+| 新颜色 / 多干扰物（如绿 / 蓝 / 黄 cube） | `parallel_runner` + 新 MJCF | `assets/scenes/pick_place_<task>.xml`、`data/instructions/<task>.txt`、`sim/envs/<task>.py` |
 | 多容器选择（多个 plate） | 同上 | 新 MJCF + 新 evaluate_success |
 | 多步骤复合指令 | 新脚本策略 + 新 segmenter | `sim/scripted_policies/<task>.py`、`data/mimicgen_adapter/segmenter.py` 扩展段数 |
 | Real2Sim（数字孪生场景） | Phase 3 标定 + 新 MJCF 自动生成 | `real2sim/` 工具链（未实现） |
-| 世界模型 / RL 探索 | 独立训练栈，复用 PickPlaceBlueEnv | `rl/` 训练目录（未实现） |
+| 世界模型 / RL 探索 | 独立训练栈，复用 `PickPlaceEnv` | `rl/` 训练目录（未实现） |
 
-> 实现新任务时建议：(1) 复制 `sim/envs/pick_place_blue.py` 为新任务文件，(2) 复制 `assets/scenes/pick_place_blue.xml` 为新场景，(3) 复制 `data/instructions/pick_place_blue.txt` 为新指令池，(4) 在 `parallel_runner` 加 `--env` 选项（当前硬编码为 PickPlaceBlue）即可走完整 Phase 1–6 流水线。
+> 实现新任务时建议：(1) 复制 `sim/envs/pick_place.py` 为新任务文件，(2) 复制 `assets/scenes/pick_place.xml` 为新场景，(3) 复制 `data/instructions/pick_place.txt` 为新指令池，(4) 在 `parallel_runner` 加 `--env` 选项（当前硬编码为 `PickPlaceEnv`，承载 red 任务）即可走完整 Phase 1–6 流水线。
 
 ---
 
@@ -44,18 +44,18 @@ Phase 6 不是单一线性流程，而是多个可独立推进的子方向。建
 
 ### 方向 A：多物体多颜色乱堆场景
 
-**目标**：从 1 红 + 1 蓝 + 1 plate → N 个不同颜色/形状物体 + 多容器，按指令抓指定物
+**目标**：从 1 红 + 1 plate → N 个不同颜色/形状物体 + 多容器，按指令抓指定物
 
-**与主路径的差异**：主路径只学了"区分蓝 vs 红"；本方向要让模型理解"任意颜色 token"。
+**与主路径的差异**：主路径只学了"抓红 cube"；本方向要让模型理解"任意颜色 token"（红/蓝/绿/黄）和"任意形状 token"（cube/sphere）。
 
 **任务清单**：
 
-- [ ] **T6A.1** 扩展 PickPlaceBlue env 为 PickPlaceClutter：3–5 个不同颜色/形状物体 + 1 plate 随机摆放
+- [ ] **T6A.1** 扩展 PickPlaceRed env 为 PickPlaceClutter：3–5 个不同颜色/形状物体 + 1 plate 随机摆放
 - [ ] **T6A.2** 抓取采样升级：contact-aware antipodal（避免抓时碰到邻近物体）
 - [ ] **T6A.3** 指令池扩展：`"put the {color} {shape} on the plate"` 模板，color ∈ {red, blue, green, yellow, orange}，shape ∈ {cube, block, sphere}
 - [ ] **T6A.4** 真机采 50 条 cluttered demo + MimicGen 扩增 5K
 - [ ] **T6A.5** Pi0.5 微调 + 真机评估
-- [ ] **T6A.6** 评估"指令到物体"对应正确率（识别 + 抓对），与主路径"颜色锚定"指标对比
+- [ ] **T6A.6** 评估"指令到物体"对应正确率（识别 + 抓对）：颜色 anchor + 形状 anchor 两个维度都要测
 
 **关键参考**：
 - *DexMimicGen* (NVIDIA, 2024)
@@ -72,8 +72,8 @@ Phase 6 不是单一线性流程，而是多个可独立推进的子方向。建
 **任务清单**：
 
 - [ ] **T6B.1** 仿真加多容器：plate + bowl + tray，颜色各异
-- [ ] **T6B.2** 单步带容器选择：`"put the blue cube in the {red plate | blue plate | bowl}"`
-- [ ] **T6B.3** 两步顺序指令：`"first put the blue cube on the plate, then put the red cube in the bowl"`
+- [ ] **T6B.2** 单步带容器选择：`"put the red cube in the {red plate | blue plate | bowl}"`
+- [ ] **T6B.3** 两步顺序指令：`"first put the red cube on the plate, then put the blue cube in the bowl"`（引入第二个 cube 作为多步任务对象）
 - [ ] **T6B.4** 脚本策略支持多步：状态机扩展为 task-level FSM
 - [ ] **T6B.5** 真机采 30 条多步 demo + 扩增
 - [ ] **T6B.6** 微调与评估

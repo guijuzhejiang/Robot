@@ -1,9 +1,9 @@
 """Gripper-event–based subtask segmenter.
 
-Splits a PickPlaceBlue episode into 4 segments:
+Splits a PickPlace episode into 4 segments:
 
-    approach_blue : t=0  →  gripper_close_t-1     (anchor: blue)
-    grasp         : gripper_close_t  →  lift_start_t-1  (anchor: blue)
+    approach      : t=0  →  gripper_close_t-1     (anchor: red)
+    grasp         : gripper_close_t  →  lift_start_t-1  (anchor: red)
     transport     : lift_start_t  →  gripper_open_t-1   (no anchor)
     place_release : gripper_open_t  →  T-1              (anchor: plate)
 
@@ -27,8 +27,11 @@ import numpy as np
 from data.mimicgen_adapter.types import Frame, Segment, SegmentedDemo
 
 
-CLOSE_THR = 0.0     # gripper ctrl < this = "closed" (SO101 range -0.17..1.75)
-OPEN_THR = 0.5      # > this = "open"
+CLOSE_THR = 0.3     # gripper ctrl < this = "closed". The scripted policy's
+                    # absolute-gripper mapping ramps env.data.ctrl[5] from ~1.07
+                    # (open) down to ~0.02 (closed); 0.3 is the midpoint with
+                    # margin so brief overshoots don't false-trigger.
+OPEN_THR = 0.8      # > this = "open" (open state holds at ~1.07–1.17)
 CLOSE_HOLD = 3      # consecutive frames required to confirm close event
 LIFT_VEL = 0.005    # m/frame
 LIFT_MIN_DELTA = 0.02  # m above grasp height
@@ -73,12 +76,12 @@ def find_lift_start(frames: list[Frame], grasp_t: int) -> int | None:
 def segment(
     frames: list[Frame],
     *,
-    task: str = "put the blue cube on the plate",
+    task: str = "put the red cube on the plate",
     fps: int = 30,
 ) -> SegmentedDemo | None:
     """Run the 4-way segmentation. Returns None if any boundary not found.
 
-    `frames[0].objects` must contain at least 'blue' and 'plate' poses for
+    `frames[0].objects` must contain at least 'red' and 'plate' poses for
     anchor resolution; if not, the caller should run object_tracker first to
     fill them in.
     """
@@ -100,9 +103,9 @@ def segment(
         return None
 
     segs: list[Segment] = [
-        Segment(name="approach_blue", anchor="blue",
+        Segment(name="approach", anchor="red",
                 frames=frames[:grasp_t], t_start=0, t_end=grasp_t - 1),
-        Segment(name="grasp", anchor="blue",
+        Segment(name="grasp", anchor="red",
                 frames=frames[grasp_t:lift_t], t_start=grasp_t, t_end=lift_t - 1),
         Segment(name="transport", anchor=None,
                 frames=frames[lift_t:open_t], t_start=lift_t, t_end=open_t - 1),

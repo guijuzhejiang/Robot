@@ -1,6 +1,6 @@
 """Antipodal grasp sampler for axis-aligned-ish cuboids (cubes).
 
-For PickPlaceBlue we treat the target as a small cube (4cm), approximate it as
+For PickPlace we treat the target as a small cube (4cm), approximate it as
 an oriented bounding box (OBB), and generate candidate top-down grasps along
 the two horizontal faces. Each candidate is a 6-DoF gripper pose:
   - position = cube center (top-down approach)

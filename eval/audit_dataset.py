@@ -7,7 +7,7 @@ Loads a LeRobot dataset and prints:
   - Random-sample frame previews (saves PNGs to --out-dir if requested)
 
 Usage:
-    python -m eval.audit_dataset --repo-id local/so101_pickplace_blue_v1
+    python -m eval.audit_dataset --repo-id local/so101_pickplace_v1
 """
 from __future__ import annotations
 

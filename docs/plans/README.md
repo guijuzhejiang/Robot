@@ -9,28 +9,32 @@
 
 ## 核心任务定义（贯穿全 Phase）
 
-> **任务代号**：`PickPlaceBlue`
-> **语言指令模板**：`"put the blue cube on the plate"` （及 10+ 同义变体）
-> **场景**：桌面上随机摆放 1 个红 cube + 1 个蓝 cube + 1 个盘子（plate）
-> **机器人**：SO-ARM101（6-DoF + 夹爪）
-> **执行流**：approach blue → grasp blue → lift → transport above plate → place → release → retract
+> **任务代号**：`PickPlaceRed`（pick-and-place 单红 cube）
+> **语言指令模板**：`"put the red cube on the plate"` （及 10+ 同义变体）
+> **场景**：桌面上随机摆放 1 个红 cube（3cm）+ 1 个盘子（plate，6cm 半径）
+> **机器人**：SO-ARM101（6-DoF + 夹爪），俯视顶抓（wrist_flex/wrist_roll 锁定 π/2）
+> **执行流**：approach → descend → grasp → lift → transport above plate → place → release → retract
 > **成功判据**（全部满足）：
->   1. blue cube 中心位于 plate 半径内
->   2. blue cube 与 plate 接触（z 落在 plate 表面 ±1cm）
->   3. red cube 位移 < 2cm（**未被误碰/误抓**）
->   4. 夹爪在终态已松开
+>   1. red cube 中心 xy 距 plate 中心 < plate 半径
+>   2. red cube 底面 z 在 plate 表面 ±1cm 内（确认落地）
+>   3. 夹爪在终态已松开
+>   4. 机械臂无关节超限/振荡
 
-**与旧版"PickCube"的差异**（旧文档里看到 PickCube/单红 cube 的地方按以下规则替换）：
+**任务命名说明**：
+- 文档统一使用 `PickPlaceRed` / "red cube on the plate" 描述任务概念
+- 代码仓库已统一使用颜色无关命名：`sim/envs/pick_place.py`、`sim/scripted_policies/pick_place.py`、`assets/scenes/pick_place.xml`、`data/instructions/pick_place.txt`、类 `PickPlaceEnv` / `PickPlacePolicy`（任务概念保持 `PickPlaceRed`，文件/类名不再带颜色后缀以便未来扩展到其他颜色 / 多物体变体）
+- 数据集 repo_id 使用颜色无关命名：`local/so101_pickplace_v1`（当前实现是 red-only 任务，但 ID 不带颜色后缀以便未来扩展）
 
-| 维度 | 旧 PickCube | 新 PickPlaceBlue |
-|------|-------------|-----------------|
-| 场景物体 | 1 × 红 cube | 1 × 红 + 1 × 蓝 + 1 × plate |
-| 任务动作 | pick + lift | pick + lift + transport + place |
-| 语言锚定 | "pick the red cube" | "put the **blue** cube on the plate"（必须区分颜色） |
-| 关键挑战 | 抓取几何 | 抓取几何 + **干扰物语义识别** + **放置精度** |
-| 成功判据 | cube 抬起 > 5cm | blue 在 plate 上 + red 未动 |
+**历史变迁简表**（用于解读旧版文档/讨论）：
 
-**任务命名贯穿全文档**：`PickPlaceBlue` / `pick_place_blue` / `assets/scenes/pick_place_blue.xml`。
+| 维度 | 早期 PickCube | 中期 PickPlace（双 cube，蓝色目标） | 当前 PickPlaceRed |
+|------|---------------|------------------------------|-------------------|
+| 场景物体 | 1 × 红 cube | 1 × 红 + 1 × 蓝 + 1 × plate | 1 × 红 cube + 1 × plate |
+| 任务动作 | pick + lift | pick + lift + transport + place | pick + lift + transport + place |
+| 语言锚定 | "pick the red cube" | "put the **blue** cube on the plate" | "put the red cube on the plate" |
+| 关键挑战 | 抓取几何 | 抓取几何 + 颜色干扰 + 放置精度 | 抓取几何 + 放置精度（pick-101 风格俯视顶抓） |
+| 干扰物 | 无 | 红 cube | 无 |
+| 成功率（脚本策略） | – | – | **93.8%**（v21 配置，见 [docs/lessons-learned-so101-grasp.md](../lessons-learned-so101-grasp.md)） |
 
 ---
 
@@ -43,27 +47,31 @@
 # Phase 0：环境验证（用 LeRobot 上游 CLI，本仓库无脚本）
 
 # Phase 1：跑通仿真 + 渲染抓取视频
-python -m mujoco.viewer --mjcf=assets/scenes/pick_place_blue.xml          # 视觉自检
-# 当前 L-1：脚本策略成功率 0-20%。下面这条加 --keep-failures --cleanup-after-collect，
-# 失败 episode 也切成 mp4 集中输出，shard 缓存自动删除。
+python -m mujoco.viewer --mjcf=assets/scenes/pick_place.xml               # 视觉自检（场景为单红 cube + 白盘）
+# 脚本策略成功率 93.8%（v21 配置）。--keep-failures 把失败 episode 也存进 dataset（task 字段会带 [FAIL:<mode>] 标签）；
+# --cleanup-after-collect 在每个 shard 落盘后清掉 images/ 临时 PNG 目录。
 python -m sim.collectors.parallel_runner --num-episodes 20 --num-workers 4 \
     --repo-id local/so101_debug --keep-failures --cleanup-after-collect
-# 输出：~/.cache/huggingface/lerobot/local/so101_debug_videos/front/shardXX_epNNNN_FAIL_grasp_fail.mp4
 
 # Phase 2：批量生成 ≥1000 条仿真 episode（Phase 1 同入口，规模放大）
 python -m sim.collectors.parallel_runner --num-episodes 1500 --num-workers 8 \
-    --repo-id local/so101_pickplace_blue_v1 \
-    --instructions data/instructions/pick_place_blue.txt
-python -m eval.audit_dataset --repo-id local/so101_pickplace_blue_v1 --n-sample 100
+    --repo-id local/so101_pickplace_v1 \
+    --instructions data/instructions/pick_place.txt \
+    --cleanup-after-collect
+# 合并 8 个 shard 成训练用单数据集
+python -m data.converters.merge_shards \
+    --shard-glob 'local/so101_pickplace_v1_shard*' \
+    --output-repo local/so101_pickplace_v1
+python -m eval.audit_dataset --repo-id local/so101_pickplace_v1 --n-sample 100
 
 # Phase 3：MimicGen 扩增 + 数据集合并
 python -m data.mimicgen_adapter.augment --from-sim-seeds 5 \
     --output-repo-id local/so101_sim_mimicgen_smoke --n-per-demo 10       # smoke
 python -m data.converters.merge_datasets \
-    --source local/so101_real_pickplace_blue_v0:real \
+    --source local/so101_real_pickplace_v0:real \
     --source local/so101_sim_mimicgen_v1:sim_mimicgen \
-    --source local/so101_pickplace_blue_v1:sim_scripted \
-    --output-repo-id local/so101_pickplace_blue_mixed_v1
+    --source local/so101_pickplace_v1:sim_scripted \
+    --output-repo-id local/so101_pickplace_mixed_v1
 python -m data.converters.expand_instructions --source-repo-id local/... --copies 3
 
 # Phase 4–7：尚未实现，各文档内"代码入口"为占位计划

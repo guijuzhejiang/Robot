@@ -6,7 +6,7 @@ context: Phase 1 L-1 修复（0% → 15%）+ Phase 2 完整 pick-101 迁移（15
 
 # SO-101 Top-Down Grasp 调参与踩坑全记录
 
-> 本文档记录在 PickPlaceBlue 任务中，把脚本 oracle policy 从 0% 抓取成功率提升到可用基线（含夹爪真正垂直桌面）的整个调试过程。**写给未来的自己 / 任何接手 SO-101 manipulation 的人**——避免我们走过的弯路。
+> 本文档记录在 PickPlace 任务中，把脚本 oracle policy 从 0% 抓取成功率提升到可用基线（含夹爪真正垂直桌面）的整个调试过程。**写给未来的自己 / 任何接手 SO-101 manipulation 的人**——避免我们走过的弯路。
 
 ## TL;DR — 两句话教训
 
@@ -104,7 +104,7 @@ class DlsIkController:
 
 ### B. Home keyframe：夹爪朝下的姿态
 
-文件：[`assets/scenes/pick_place_blue.xml`](../assets/scenes/pick_place_blue.xml)
+文件：[`assets/scenes/pick_place.xml`](../assets/scenes/pick_place.xml)
 
 ```xml
 <key name="home"
@@ -131,7 +131,7 @@ class BaseSoArmEnv:
 
 ### D. Policy：grasp 阶段锁 wrist
 
-文件：[`sim/scripted_policies/pick_place_blue.py`](../sim/scripted_policies/pick_place_blue.py)
+文件：[`sim/scripted_policies/pick_place.py`](../sim/scripted_policies/pick_place.py)
 
 ```python
 def __call__(self, env, obs):
@@ -144,7 +144,7 @@ def __call__(self, env, obs):
 
 ### E. 工作区：基于 reach envelope 调整
 
-`PickPlaceBlueEnv.CUBE_X_RANGE / CUBE_Y_RANGE` 需要根据 down-facing wrist 下的实际 reach envelope 重调——5-DoF + locked wrist 下 reach 范围比 free-wrist 小，y 方向尤其窄。当前用 `cube_x ∈ [0.18, 0.25], y ∈ [-0.05, 0.05]`。
+`PickPlaceEnv.CUBE_X_RANGE / CUBE_Y_RANGE` 需要根据 down-facing wrist 下的实际 reach envelope 重调——5-DoF + locked wrist 下 reach 范围比 free-wrist 小，y 方向尤其窄。当前用 `cube_x ∈ [0.18, 0.25], y ∈ [-0.05, 0.05]`。
 
 ---
 
@@ -284,7 +284,7 @@ assets/so101_pick101/
 └── ...                      # 其它备用 scene xml
 ```
 
-scene 文件 `assets/scenes/pick_place_blue.xml` 用 `<include file="../so101_pick101/so101_new_calib.xml"/>` 引用，加上单红 cube + freejoint 白盘 + 三盏可 DR 光源 + front 相机 + home keyframe。
+scene 文件 `assets/scenes/pick_place.xml` 用 `<include file="../so101_pick101/so101_new_calib.xml"/>` 引用，加上单红 cube + freejoint 白盘 + 三盏可 DR 光源 + front 相机 + home keyframe。
 
 ### G. env 加三条 scripted-oracle 旁路
 
@@ -300,7 +300,7 @@ self.gripper_action_mode: str = "delta"            # "absolute" 给 oracle 用
 
 ### H. wrist_roll 按 cube 位置同步对齐
 
-[`sim/envs/pick_place_blue.py`](../sim/envs/pick_place_blue.py) `_post_reset`：
+[`sim/envs/pick_place.py`](../sim/envs/pick_place.py) `_post_reset`：
 
 ```python
 alpha = float(np.arctan2(cube_xy[1], cube_xy[0]))
@@ -315,7 +315,7 @@ self.data.ctrl[4] = wrist_roll
 
 ### I. policy 用 cube_anchor + finger_width_offset + 闭环 PLACE
 
-[`sim/scripted_policies/pick_place_blue.py`](../sim/scripted_policies/pick_place_blue.py)：
+[`sim/scripted_policies/pick_place.py`](../sim/scripted_policies/pick_place.py)：
 
 ```python
 FINGER_WIDTH_OFFSET = -0.015     # gripperframe 偏向 static finger，沿世界 Y 补偿
@@ -340,7 +340,7 @@ cube yaw 在 env 端量化到 `{0, π/2, π, 3π/2}`。
 
 [`sim/envs/base.py`](../sim/envs/base.py)：默认 `IMG_HEIGHT=480, IMG_WIDTH=640`（front 相机 native）；构造参数 `img_height=` / `img_width=` 可覆盖。
 
-[`assets/scenes/pick_place_blue.xml`](../assets/scenes/pick_place_blue.xml)：`<global offwidth="1920" offheight="1080"/>` 支持到 1080p。
+[`assets/scenes/pick_place.xml`](../assets/scenes/pick_place.xml)：`<global offwidth="1920" offheight="1080"/>` 支持到 1080p。
 
 [`data/converters/sim_to_lerobot.py`](../data/converters/sim_to_lerobot.py)：`build_features(img_height, img_width)` 工厂；`make_or_resume_dataset` 同名 kwargs。
 

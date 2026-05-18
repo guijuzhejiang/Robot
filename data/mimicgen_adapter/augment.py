@@ -11,7 +11,7 @@ Pipeline:
 
 Usage (CLI):
     python -m data.mimicgen_adapter.augment \\
-        --source-repo-id local/so101_real_pickplace_blue_v0 \\
+        --source-repo-id local/so101_real_pickplace_v0 \\
         --output-repo-id local/so101_sim_mimicgen_v1 \\
         --n-per-demo 50
 
@@ -34,19 +34,20 @@ from data.mimicgen_adapter.types import ObjectPose, SegmentedDemo
 
 
 def randomize_scene(rng: np.random.Generator, *, env) -> dict[str, ObjectPose]:
-    """Sample a fresh red/blue/plate configuration consistent with env workspace."""
-    # Reuse env's workspace bounds
-    while True:
-        red_xy = np.array([rng.uniform(*env.CUBE_X_RANGE), rng.uniform(*env.CUBE_Y_RANGE)])
-        blue_xy = np.array([rng.uniform(*env.CUBE_X_RANGE), rng.uniform(*env.CUBE_Y_RANGE)])
-        if np.linalg.norm(red_xy - blue_xy) >= env.CUBE_MIN_SEPARATION:
-            break
+    """Sample a fresh red/plate configuration consistent with env workspace.
+
+    Yaw is fixed to 0 for both cube and plate: both are rotationally
+    symmetric for this task (4-fold cube, circular plate), so randomising
+    yaw would only rotate the replayed ee trajectory about the new anchor
+    by a meaningless angle — which actually breaks replay because source
+    demos record yaw=0 while a random new-anchor yaw produces a random
+    rotation in ``_transform_xy_under_anchor``.
+    """
+    red_xy = np.array([rng.uniform(*env.CUBE_X_RANGE), rng.uniform(*env.CUBE_Y_RANGE)])
     plate_xy = np.array([rng.uniform(*env.PLATE_X_RANGE), rng.uniform(*env.PLATE_Y_RANGE)])
     return {
-        "red":  ObjectPose("red",  red_xy,  yaw=rng.uniform(-np.pi, np.pi), z=env.CUBE_HALF),
-        "blue": ObjectPose("blue", blue_xy, yaw=rng.uniform(-np.pi, np.pi), z=env.CUBE_HALF),
-        "plate": ObjectPose("plate", plate_xy, yaw=rng.uniform(-np.pi, np.pi),
-                            z=env.PLATE_HALF_HEIGHT),
+        "red":  ObjectPose("red",  red_xy,  yaw=0.0, z=env.CUBE_HALF),
+        "plate": ObjectPose("plate", plate_xy, yaw=0.0, z=env.PLATE_HALF_HEIGHT),
     }
 
 
@@ -63,7 +64,7 @@ def synthesize_source_demos(n: int, *, env, instruction_pool: list[str],
             returned True. Default False so segmenter-pipeline tests work even
             when the scripted policy has low success rate (current ~0–20%).
     """
-    from sim.scripted_policies.pick_place_blue import PickPlaceBluePolicy
+    from sim.scripted_policies.pick_place import PickPlacePolicy
 
     demos: list[SegmentedDemo] = []
     seed = 0
@@ -72,9 +73,16 @@ def synthesize_source_demos(n: int, *, env, instruction_pool: list[str],
         attempts += 1
         seed += 1
         obs, _ = env.reset(seed=seed)
-        policy = PickPlaceBluePolicy()
+        policy = PickPlacePolicy()
         ee_positions: list[np.ndarray] = []
         gripper_states: list[float] = []
+        # NOTE: `actions` here is structurally needed (episode_from_ee_actions
+        # uses its length to size the Frame list) but its values are NOT used
+        # downstream. The scripted oracle returns [0,0,0,gripper] (it drives
+        # the arm via env.ee_target_override), so this list is essentially
+        # [0,0,0,*]. Real ee motion is reconstructed by the replayer from
+        # `ee_positions` (per-frame TCP world coords) — do NOT add this list
+        # to any LeRobot dataset directly.
         actions: list[np.ndarray] = []
         done = False
         while not done:
@@ -88,17 +96,16 @@ def synthesize_source_demos(n: int, *, env, instruction_pool: list[str],
             done = term or trunc
         if require_success and not info.get("is_success"):
             continue
-        # Build Frames from arrays
+        # Build Frames from arrays — actions only used for length, see note above.
         frames = episode_from_ee_actions(
             np.stack(actions), np.stack(ee_positions), np.array(gripper_states),
             initial_objects={
                 "red":  ObjectPose("red", env._red_init_xy.copy(), 0.0, env.CUBE_HALF),
-                "blue": ObjectPose("blue", env._blue_init_xy.copy(), 0.0, env.CUBE_HALF),
                 "plate": ObjectPose("plate", env.body_pos("plate")[:2].copy(), 0.0,
                                     env.PLATE_HALF_HEIGHT),
             },
         )
-        task = rng.choice(instruction_pool) if instruction_pool else "put the blue cube on the plate"
+        task = rng.choice(instruction_pool) if instruction_pool else "put the red cube on the plate"
         sd = segment(frames, task=task)
         if sd is None:
             continue
@@ -114,10 +121,10 @@ def augment(
     seed: int = 0,
 ) -> dict:
     """Replay each source demo into N_per_demo new randomized scenes."""
-    from sim.envs.pick_place_blue import PickPlaceBlueEnv
+    from sim.envs.pick_place import PickPlaceEnv
 
-    env = PickPlaceBlueEnv(observation_mode="both", action_mode="ee",
-                           max_episode_steps=400)
+    env = PickPlaceEnv(observation_mode="both", action_mode="ee",
+                       max_episode_steps=400)
     writer = make_or_resume_dataset(repo_id=output_repo_id, fps=30, reset=True)
     rng = np.random.default_rng(seed)
 
@@ -130,9 +137,14 @@ def augment(
             result = replay_segmented_demo(env, demo, new_scene,
                                            seed=stats["attempted"])
             if result.success:
-                # Write the recorded actions back into a fresh episode
-                # by replaying them step-by-step from the same reset state.
-                _write_episode(env, writer, demo.task, new_scene, result.actions,
+                # Write the recorded actions back into a fresh episode by
+                # replaying them step-by-step from the same reset state.
+                # `result.actions` is the joint label (primary), but env
+                # still consumes ee gym actions; pass both so _write_episode
+                # can step with ee and record joint.
+                _write_episode(env, writer, demo.task, new_scene,
+                               actions=result.actions,
+                               ee_actions=result.ee_actions,
                                seed=stats["attempted"])
                 stats["succeeded"] += 1
             else:
@@ -147,17 +159,28 @@ def augment(
     return stats
 
 
-def _write_episode(env, writer, task: str, new_scene: dict, actions: list[np.ndarray],
+def _write_episode(env, writer, task: str, new_scene: dict,
+                   *,
+                   actions: list[np.ndarray],
+                   ee_actions: list[np.ndarray],
                    seed: int) -> None:
-    """Reset env, place objects, replay actions, and stream frames into writer."""
+    """Reset env, place objects, replay, stream frames into writer.
+
+    `actions`     — joint ctrl labels (6,), written to the `action` column.
+    `ee_actions`  — ee-delta gym actions (4,), consumed by env.step (since
+                    env.action_mode='ee') and written to `ee_action` column.
+    """
     from data.mimicgen_adapter.replayer import _place_objects
 
     obs, _ = env.reset(seed=seed)
     _place_objects(env, new_scene)
     obs = env._compute_obs()
-    for action in actions:
-        writer.add_frame_from_obs(obs, action, task=task)
-        next_obs, _, term, trunc, _ = env.step(action)
+    for action, ee_action in zip(actions, ee_actions):
+        writer.add_frame_from_obs(obs, action, task=task,
+                                  ee_action=ee_action)
+        # env still consumes ee gym actions to drive the IK; the recorded
+        # `action` column above is the joint label, not the gym input.
+        next_obs, _, term, trunc, _ = env.step(ee_action)
         obs = next_obs
         if term or trunc:
             break
@@ -174,7 +197,7 @@ def main():
     ap.add_argument("--n-per-demo", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--instructions",
-                    default="data/instructions/pick_place_blue.txt")
+                    default="data/instructions/pick_place.txt")
     args = ap.parse_args()
 
     instructions = []
@@ -183,10 +206,10 @@ def main():
         instructions = [ln.strip() for ln in p.read_text().splitlines() if ln.strip()]
 
     if args.from_sim_seeds:
-        from sim.envs.pick_place_blue import PickPlaceBlueEnv
+        from sim.envs.pick_place import PickPlaceEnv
 
-        env = PickPlaceBlueEnv(observation_mode="state", action_mode="ee",
-                               max_episode_steps=400)
+        env = PickPlaceEnv(observation_mode="state", action_mode="ee",
+                           max_episode_steps=400)
         rng = np.random.default_rng(args.seed)
         demos = synthesize_source_demos(
             args.from_sim_seeds, env=env, instruction_pool=instructions, rng=rng,

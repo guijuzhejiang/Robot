@@ -26,11 +26,11 @@ table_to_robot:
   translation: [0.0, 0.0, 0.0]
   # In MJCF, table top is at z = 0 (table geom is at pos z=-0.01 with half-height 0.01)
   rpy: [0.0, 0.0, 0.0]
-  half_extents: [0.30, 0.30, 0.01]  # matches assets/scenes/pick_place_blue.xml
+  half_extents: [0.30, 0.30, 0.01]  # matches assets/scenes/pick_place.xml
 
 # Workspace bounds (subset of table where cubes / plate may appear)
 workspace:
-  cube_x_range: [0.10, 0.22]   # left half — must match PickPlaceBlueEnv
+  cube_x_range: [0.10, 0.22]   # left half — must match PickPlaceEnv
   cube_y_range: [-0.12, 0.12]
   plate_x_range: [0.24, 0.30]  # right half
   plate_y_range: [-0.06, 0.06]

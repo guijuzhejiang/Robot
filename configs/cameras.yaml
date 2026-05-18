@@ -34,5 +34,5 @@ cameras:
       cy: null
     distortion: [null, null, null, null, null]
     # Wrist cam is rigidly mounted on the gripper; extrinsics computed at runtime
-    # from forward kinematics (see sim/envs/pick_place_blue.py wrist_cam definition).
+    # from forward kinematics (see sim/envs/pick_place.py wrist_cam definition).
     extrinsics_override: null
