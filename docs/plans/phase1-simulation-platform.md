@@ -2,86 +2,43 @@
 
 **周期**：1–2 周
 **前置依赖**：Phase 0 完成
-**目标**：在 MuJoCo 中跑通 SO-ARM101 模型；实现一个最小可用的 **`PickPlaceRed`** 任务环境（含 reset / step / success / 域随机化），手写脚本策略能在仿真里完成"抓红 cube → 放进 plate"全流程
+**目标**：在 MuJoCo 中跑通 SO-ARM101 模型；实现最小可用的 **`PickPlaceRed`** 任务环境（reset / step / success / 域随机化），手写脚本策略在仿真里完成"抓红 cube → 放进 plate"全流程
 
-> **核心任务**：桌面上 1 红 cube（3cm）+ 1 plate（6cm 半径），把红 cube 放进 plate。机械臂俯视顶抓（wrist_flex/wrist_roll 锁定 π/2）。详细规约见 [README.md](README.md) 顶部"核心任务定义"。
-
-> **命名约定**：代码统一使用颜色无关命名 `sim/envs/pick_place.py`、`assets/scenes/pick_place.xml`、类 `PickPlaceEnv`，便于将来扩展到其他颜色 / 多物体变体；当前实现是 red-only 任务。
+> 核心任务详细规约见 [README.md](README.md)。当前脚本策略成功率 **93.8%**（v21 配置：pick-101 风格俯视顶抓 + cube yaw 4 等分量化 + wrist_roll 按 cube 位置同步）。详见 [docs/lessons-learned-so101-grasp.md](../lessons-learned-so101-grasp.md)。
 
 ---
 
 ## 代码入口（快速开始）
 
-> 所有命令在仓库根目录 `/home/zzg/workspace/pycharm/Robot` 下、`conda activate py312_cu121` 后执行。
+```bash
+# 视觉自检
+python -m mujoco.viewer --mjcf=assets/scenes/pick_place.xml
 
-> ✅ **当前脚本策略成功率 93.8%**（v21 配置，pick-101 风格俯视顶抓 + cube yaw 4 等分量化 + 按 cube 位置同步 wrist_roll）。详见 [docs/lessons-learned-so101-grasp.md](../lessons-learned-so101-grasp.md)。
+# 跑 20 条 episode 看视频（保留失败，清理临时 PNG）
+python -m sim.collectors.parallel_runner --num-episodes 20 --num-workers 4 \
+    --repo-id local/so101_debug --keep-failures --cleanup-after-collect
 
-| 想做的事 | 一行命令 | 产出 |
-|---------|---------|------|
-| 用 MuJoCo viewer 打开仿真场景，手动拖动 SO101 / cube / plate（T1.1–T1.2、T1.5 视觉自检） | `python -m mujoco.viewer --mjcf=assets/scenes/pick_place.xml` | GUI 窗口 |
-| 跑 20 条 episode 看视频（成败都存，shard 里清掉 images/ 临时 PNG） | `python -m sim.collectors.parallel_runner --num-episodes 20 --num-workers 4 --repo-id local/so101_debug --keep-failures --cleanup-after-collect` | 8 个 shard dataset（含 front+wrist 拼合 mp4 + parquet + meta），task 字段失败时会带 `[FAIL:<mode>]` 后缀 |
-| 关闭域随机化做 debug | 上一条命令追加 `--no-dr` | 同上 |
-| **正式批量采集**：只保存成功 episode（默认行为），供训练用 | `python -m sim.collectors.parallel_runner --num-episodes 1000 --num-workers 8 --repo-id local/so101_pickplace_v0 --cleanup-after-collect` | `~/.cache/huggingface/lerobot/local/so101_pickplace_v0_shard{00..07}/`（保留完整 dataset 含 mp4 + parquet） |
-| 合并 8 个 shard 成单一训练数据集 | `python -m data.converters.merge_shards --shard-glob 'local/so101_pickplace_v0_shard*' --output-repo local/so101_pickplace_v0` | `~/.cache/huggingface/lerobot/local/so101_pickplace_v0/`（合并后单数据集） |
-| 审计采集到的数据集 | `python -m eval.audit_dataset --repo-id local/so101_pickplace_v0 --n-sample 50` | 控制台报告 + 可选 `--out-dir` 输出 markdown |
-| 验证合并 OK 后清掉 shard | `rm -rf ~/.cache/huggingface/lerobot/local/so101_pickplace_v0_shard*` | — |
+# 关 DR 做 debug
+python -m sim.collectors.parallel_runner --num-episodes 20 --num-workers 4 \
+    --repo-id local/so101_debug_nodr --no-dr
+```
 
-**两个 flag 详解**：
-
-- `--keep-failures`：失败 episode 也写入 dataset；它们的 `task` 字段会被打上 `[FAIL:<mode>]` 后缀（mode ∈ `grasp_fail` / `lift_drop` / `place_miss` / `plate_off` / `joint_limit` / `timeout`），下游 audit / training 可以按此过滤剔除。
-- `--cleanup-after-collect`：每个 shard 落盘后删掉 LeRobot 编码 mp4 时残留的 `images/` 临时 PNG 目录（保留训练必需的 `data/` + `videos/` + `meta/`）。配合 `merge_shards` 使用。
+**两个 flag**：
+- `--keep-failures`：失败 episode 也写入，`task` 字段加 `[FAIL:<mode>]` 后缀（mode ∈ `grasp_fail` / `lift_drop` / `place_miss` / `plate_off` / `joint_limit` / `timeout`）
+- `--cleanup-after-collect`：每个 shard 落盘后删 `images/` 临时 PNG，保留 `data/` + `videos/` + `meta/`
 
 **入口与任务清单的对应关系**：
 
-| Task | 实现文件（库） | 由哪个 CLI 串起来 |
-|------|--------------|------------------|
-| T1.1–T1.2 验证 MuJoCo + 模型 | `assets/scenes/pick_place.xml` + `assets/so101_pick101/` | `python -m mujoco.viewer` |
-| T1.3 BaseSoArmEnv 基类 | [`sim/envs/base.py`](../../sim/envs/base.py) | 被 `PickPlaceEnv` 继承 |
-| T1.4 PickPlaceRed 环境（类 `PickPlaceEnv`） | [`sim/envs/pick_place.py`](../../sim/envs/pick_place.py) | `parallel_runner` / `pick_place_pipeline` |
-| T1.5 双相机渲染 | `assets/scenes/pick_place.xml`（`front` + `wrist` camera）+ `sim/envs/base.py::_render_cameras` | 同上 |
-| T1.6 微分 IK（DLS） | [`sim/controllers/ik_dls.py`](../../sim/controllers/ik_dls.py) | 被脚本策略调用 |
-| T1.7 9 阶段脚本策略 | [`sim/scripted_policies/pick_place.py`](../../sim/scripted_policies/pick_place.py) | `parallel_runner` / `pick_place_pipeline` |
-| T1.8 域随机化 | [`sim/randomization/`](../../sim/randomization/) | 默认开启，`--no-dr` 关闭 |
-| T1.9 LeRobot writer | [`data/converters/sim_to_lerobot.py`](../../data/converters/sim_to_lerobot.py) | 被 `parallel_runner` 调用 |
-
----
-
-## 关键技术与工具
-
-| 工具 | 用途 | 获取方式 |
-|------|------|---------|
-| MuJoCo | 物理引擎 | `pip install mujoco` |
-| mujoco_menagerie | 官方机器人模型库（含 `trs_so_arm100/`） | `git clone https://github.com/google-deepmind/mujoco_menagerie` |
-| mink | MuJoCo 上的微分 IK 求解器 | `pip install mink` |
-| dm_control | DeepMind 仿真组件（observation/reward 辅助） | `pip install dm_control` |
-| gymnasium | 标准 RL/IL 环境接口 | `pip install gymnasium` |
-| imageio + ffmpeg | 录制仿真视频 | `pip install imageio[ffmpeg]` |
-
-### 选型说明：为什么主路径是 MuJoCo + Menagerie
-
-先澄清一个常见误读：**RoboCasa / MimicGen 与 gym-lowcostrobot 并没有从主项目里被淘汰**。它们和 MuJoCo + Menagerie 的关系是：
-
-- **MimicGen** 是数据扩增框架（algorithm），底层仍是 MuJoCo（通过 robosuite）。我们在 **Phase 3 仍然使用 MimicGen 的算法思路**，只是不依赖 robosuite 整个栈。
-- **gym-lowcostrobot** 是 LeRobot 生态对 SO-ARM 系列的封装，底层模型本身就是 mujoco_menagerie 的 SO-ARM100。所以它和我们主路径**底层一致**，区别在 env API 与任务库。
-- **RoboCasa** 是 robosuite 之上的厨房场景库，原生不支持 SO-ARM100。
-
-| 平台 | SO-ARM 原生 | 任务库 | 数据扩增 | 入门难度 | 灵活度 |
-|------|------------|--------|----------|---------|--------|
-| **MuJoCo + Menagerie**（主路径） | ✅ 官方 MJCF | 自写 | 配合 MimicGen 思路 | 中 | ⭐⭐⭐⭐⭐ |
-| **gym-lowcostrobot** | ✅ 内置 | PickPlace / Push / Stack 等已有 | LeRobot 数据原生 | 低 | ⭐⭐⭐ |
-| **RoboCasa + MimicGen** | ❌（Franka / UR5 等） | 100+ 厨房 / 操作任务 | ⭐ MimicGen 原生 | 高 | ⭐⭐⭐⭐ |
-
-**主路径定为 MuJoCo + Menagerie 的三个理由**：
-
-1. **SO-ARM100 的官方 MJCF 在 mujoco_menagerie**（DeepMind 维护，与真机几何最接近），免去 URDF → MJCF 的工作
-2. Phase 2 要写的所有自定义化（自己的 grasp sampler、planner、自定义任务、自定义 DR）都在这一层最直接，没有 robosuite / RoboCasa 等中间抽象层
-3. 主路径输出 LeRobot 格式，与 Phase 3 真机 demo / Phase 4 训练对齐
-
-**不直接用 RoboCasa/MimicGen 作为主平台的原因**：SO-ARM100 不是 robosuite 原生，需要 URDF → MJCF + 控制器接入；RoboCasa 的厨房资产对 SO101 这种小臂桌面任务也用不上。真正有价值的是 **MimicGen 的算法**，这部分我们 Phase 3 移植。
-
-**不直接用 gym-lowcostrobot 作为主平台的原因**：作为社区项目，任务定义和自定义 DR 接口不够灵活；但它是**最快起步**的选项，下面列出搭建方法，你可以把它当作"快速验证 + 找 bug 工具"。
-
-如果你想用 gym-lowcostrobot 先起步、后期切换到自建 MuJoCo + Menagerie，是合理路径：底层模型一致 + LeRobot 数据格式天然兼容，切换成本低。两个备选平台的具体搭建方法见本文末尾「备选平台搭建」一节。
+| Task | 实现文件 |
+|------|---------|
+| T1.1–T1.2 MuJoCo + SO101 模型 | `assets/scenes/pick_place.xml` + `assets/so101_pick101/` |
+| T1.3 BaseSoArmEnv 基类 | [`sim/envs/base.py`](../../sim/envs/base.py) |
+| T1.4 PickPlaceRed 环境 | [`sim/envs/pick_place.py`](../../sim/envs/pick_place.py) |
+| T1.5 双相机渲染 | `assets/scenes/pick_place.xml` + `sim/envs/base.py::_render_cameras` |
+| T1.6 微分 IK（DLS） | [`sim/controllers/ik_dls.py`](../../sim/controllers/ik_dls.py) |
+| T1.7 9 阶段脚本策略 | [`sim/scripted_policies/pick_place.py`](../../sim/scripted_policies/pick_place.py) |
+| T1.8 域随机化 | [`sim/randomization/`](../../sim/randomization/) |
+| T1.9 LeRobot writer | [`data/converters/sim_to_lerobot.py`](../../data/converters/sim_to_lerobot.py) |
 
 ---
 
@@ -89,62 +46,32 @@
 
 ### T1.1 安装并验证 MuJoCo
 
-**目标**：能加载并渲染基本场景
-
 **步骤**：
 - [ ] `pip install mujoco`
-- [ ] 运行 `python -m mujoco.viewer`，确认 GUI 弹出
-- [ ] 用官方示例 humanoid.xml 验证物理仿真
-
-**关键文件**：无
-
-**参考**：
-- `https://mujoco.readthedocs.io/en/stable/python.html`
+- [ ] `python -m mujoco.viewer` 弹出 GUI
+- [ ] 用官方 humanoid.xml 验证物理仿真
 
 **验证**：viewer 中可手动拖动物体
 
----
-
 ### T1.2 导入 SO-ARM100 模型
-
-**目标**：在 MuJoCo 里加载机械臂
 
 **步骤**：
 - [ ] `git clone https://github.com/google-deepmind/mujoco_menagerie assets/menagerie`
 - [ ] 找到 `assets/menagerie/trs_so_arm100/so_arm100.xml`
-- [ ] 写一个最小加载脚本 `sim/scripts/load_so101.py`
-- [ ] 用 viewer 打开，确认关节滑块能控制 6 自由度 + 1 夹爪
-
-**关键文件**：
-- `sim/scripts/load_so101.py`：最小加载器
-- `assets/menagerie/trs_so_arm100/`：模型资产
-
-**参考**：
-- Menagerie SO-ARM100 README
+- [ ] 写最小加载脚本 `sim/scripts/load_so101.py`
 
 **验证**：viewer 显示完整机械臂，关节滑块响应正确
 
 ---
 
-### T1.3 搭建任务基类
+### T1.3 BaseSoArmEnv 基类
 
-**目标**：定义一个可复用的 BaseEnv 抽象
-
-**步骤**：
-- [ ] 设计 `sim/envs/base.py`，包含：
-  - `reset(seed)`：初始化场景、采样物体姿态
-  - `step(action)`：写入关节目标 → 物理仿真 → 返回 obs
-  - `get_observation()`：返回 `{joint_pos, joint_vel, ee_pose, images}`
-  - `evaluate_success()`：抽象方法
-  - `render()`：返回 RGB + depth
-- [ ] 暴露 gymnasium 兼容接口
-
-**关键文件**：
-- `sim/envs/base.py`
-
-**参考**：
-- LeRobot 仿真环境实现：`https://github.com/perezjln/gym-lowcostrobot`（gym-lowcostrobot 项目）
-- 可直接借鉴其 `BaseRobotEnv` 结构
+**步骤**：设计 `sim/envs/base.py` 暴露 gymnasium 兼容接口：
+- `reset(seed)`：初始化场景、采样物体姿态
+- `step(action)`：写入关节目标 → 物理仿真 → 返回 obs
+- `get_observation()`：`{joint_pos, joint_vel, ee_pose, images}`
+- `evaluate_success()`：抽象方法
+- `render()`：返回 RGB + depth
 
 **验证**：基类可被子类继承并实例化
 
@@ -152,131 +79,80 @@
 
 ### T1.4 实现 PickPlaceRed 环境
 
-**目标**：第一个完整任务
+**场景**：SO-ARM101（pick-101 移植的 `assets/so101_pick101/so101_new_calib.xml`，带 graspframe + finger pad）+ 桌面 + 红 cube（3cm）+ 白 plate（cylinder，6cm 半径 × 0.2cm 半高，freejoint，质量 0.15kg）。
 
-**步骤**：
-- [ ] 创建 `sim/envs/pick_place.py`（颜色无关命名，内容是 red-only 任务；类名 `PickPlaceEnv`）
-- [ ] **场景包含**：SO-ARM101（pick-101 移植的 `assets/so101_pick101/so101_new_calib.xml`，带 graspframe + finger pad）+ 桌面 + 红色立方体（3cm）+ 白色 plate（cylinder，6cm 半径 × 0.2cm 半高，freejoint，质量 0.15kg）
-- [ ] **MJCF body origin 约定**：cube body origin 放在 geom 中心（避免 IK 计算偏移）；plate 同理
-- [ ] `reset()` 工作区（v21 配置）：
-  - `CUBE_X_RANGE=(0.16, 0.22)`、`CUBE_Y_RANGE=(-0.08, 0.08)`
-  - `PLATE_X_RANGE=(0.24, 0.30)`、`PLATE_Y_RANGE=(-0.06, 0.06)`
-  - cube yaw 量化到 `{0, π/2, π, 3π/2}`（利用 cube 4 重对称避开 45° 夹爪失败）
-  - **wrist_roll 按 cube 位置同步**：`wrist_roll = clip(π/2 - atan2(cube.y, cube.x), 限位)`，保证总 z 旋转 = π/2
-- [ ] `step()`：action_mode="ee" 时 action 是 4 维（dx, dy, dz, gripper），action_mode="joint" 时是 7 维关节目标
-- [ ] `evaluate_success()`：以下全部满足 → 成功
-  1. red cube 中心 xy 到 plate 中心距离 < plate 半径
-  2. red cube 底面 z 在 plate 表面 ±1cm 内
-  3. 夹爪在终态已松开（gripper qpos > 阈值）
-- [ ] `evaluate_failure_mode()`：返回 `grasp_fail` / `lift_drop` / `place_miss` / `plate_off` / `joint_limit` / `timeout`
-- [ ] 写 MJCF：`assets/scenes/pick_place.xml` `<include>` SO101 + 桌子 + 单 cube + plate
+**MJCF 约定**：cube/plate body origin 放在 geom 中心，避免 IK 计算偏移。
 
-**关键文件**：
-- `sim/envs/pick_place.py`（实现）
-- `assets/scenes/pick_place.xml`（场景）
-- `assets/so101_pick101/`（pick-101 verbatim 移植的 SO101 模型，含 finger_pad/graspframe）
+**`reset()` 工作区（v21）**：
+- `CUBE_X_RANGE=(0.16, 0.22)`、`CUBE_Y_RANGE=(-0.08, 0.08)`
+- `PLATE_X_RANGE=(0.24, 0.30)`、`PLATE_Y_RANGE=(-0.06, 0.06)`
+- cube yaw 量化到 `{0, π/2, π, 3π/2}`（利用 cube 4 重对称避开 45° 夹爪失败）
+- **wrist_roll 按 cube 位置同步**：`wrist_roll = clip(π/2 - atan2(cube.y, cube.x), 限位)`，保证总 z 旋转 = π/2
 
-**参考**：
-- pick-101: `https://github.com/ggand0/pick-101`（俯视顶抓 oracle 与模型来源）
-- robosuite 的 `PickPlace` 任务（结构参考，不是直接 import）：`https://github.com/ARISE-Initiative/robosuite/blob/master/robosuite/environments/manipulation/pick_place.py`
+**`step()`**：`action_mode="ee"` 时 action 4 维 (dx, dy, dz, gripper)；`action_mode="joint"` 时 7 维关节目标。
 
-**验证**：`env.reset()` + `env.step(zero_action)` 能跑 100 步不崩；cube / plate 在 wrist + front 相机里清晰可见
+**`evaluate_success()`**：cube xy 距 plate < 半径 AND cube 底面 z 在 plate 表面 ±1cm AND 夹爪已松开。
+
+**`evaluate_failure_mode()`**：`grasp_fail` / `lift_drop` / `place_miss` / `plate_off` / `joint_limit` / `timeout`。
+
+**关键文件**：`sim/envs/pick_place.py`、`assets/scenes/pick_place.xml`、`assets/so101_pick101/`
+
+**参考**：[pick-101 仓库](https://github.com/ggand0/pick-101)（俯视顶抓 oracle 与模型来源）
+
+**验证**：`env.reset() + env.step(zero_action)` 跑 100 步不崩；cube/plate 在 wrist+front 相机里清晰可见
 
 ---
 
-### T1.5 添加双相机渲染
+### T1.5 双相机渲染
 
-**目标**：复刻真机相机配置
+**步骤**：MJCF 加两个 camera site：`wrist_cam`（吸附在 ee，俯视）+ `front_cam`（固定桌前 30cm，俯角 30°）。`get_observation()` 渲染两路 640×480@30fps RGB。
 
-**步骤**：
-- [ ] 在 MJCF 里加两个 camera site：
-  - `wrist_cam`：吸附在 end-effector，俯视
-  - `front_cam`：固定在桌前 30cm，俯角 30°
-- [ ] 在 `get_observation()` 里渲染两路 RGB（640×480@30fps 模拟）
-- [ ] 可选：同时输出 depth
-
-**关键文件**：
-- `assets/scenes/pick_place.xml`（更新 camera）
-- `sim/envs/pick_place.py`（更新 observation）
-
-**参考**：
-- MuJoCo camera 文档：`https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-camera`
-
-**验证**：obs 字典里 `images.wrist` 与 `images.front` 都是 640×480×3 uint8
+**验证**：`obs.images.wrist` 与 `obs.images.front` 都是 640×480×3 uint8
 
 ---
 
-### T1.6 实现微分 IK 控制接口
+### T1.6 微分 IK（DLS）
 
-**目标**：能用 ee 位姿目标驱动机械臂
+用 mink 在 `sim/controllers/ik.py` 实现 `ik(target_pose, current_q) -> q_target`。DLS 阻尼 + `locked_joints` 锁 wrist。**关键**：`locked_joints` 读 `data.ctrl[j]` 而不是 `data.qpos`，防止物理漂移污染 ctrl。
 
-**步骤**：
-- [ ] 用 mink 在 `sim/controllers/ik.py` 实现：
-  ```
-  ik(target_pose: SE3, current_q: np.ndarray) -> np.ndarray  # 返回目标关节
-  ```
-- [ ] 验证：给定一个桌面上方 10cm 的目标位姿，IK 解能让 ee 到位
-
-**关键文件**：
-- `sim/controllers/ik.py`
-
-**参考**：
-- mink 官方示例：`https://github.com/kevinzakka/mink/tree/main/examples`
-
-**验证**：调用 IK 后跑 200 step 仿真，ee 位置与目标位置距离 < 5mm
+**验证**：给定桌面上方 10cm 目标位姿，200 step 后 ee 距目标 < 5mm
 
 ---
 
-### T1.7 实现脚本策略（9 阶段，pick-101 风格俯视顶抓）
+### T1.7 9 阶段脚本策略
 
-**目标**：在仿真里用硬编码策略完成 PickPlaceRed 全流程
+在 `sim/scripted_policies/pick_place.py` 写 9 阶段状态机：
 
-**步骤**：
-- [ ] 在 `sim/scripted_policies/pick_place.py` 写 9 阶段状态机：
-  1. **HOME**：等待复位
-  2. **APPROACH**：移到 cube 上方 3.5cm（含 `FINGER_WIDTH_OFFSET=-0.015`）
-  3. **DESCEND**：下降到 z=0.020（夹爪 finger_pad 触到 cube 顶）
-  4. **GRASP**：渐进闭合（60 步斜坡）+ 接触检测后保压
-  5. **LIFT**：抬起到 TRANSPORT_Z=0.10
-  6. **TRANSPORT**：水平移到 plate 上方
-  7. **PLACE_DESCEND**：闭环 `target = ee_cur + (desired_cube - cube_obs)` 下降到 plate 表面上方
-  8. **RELEASE**：松开夹爪
-  9. **RETRACT**：抬起撤离
-- [ ] 用 DLS IK（`sim/controllers/ik_dls.py`）锁定 `wrist_flex=π/2`、`wrist_roll`（按 cube 位置同步设定）
-- [ ] cube_anchor / plate_anchor 在首次 `__call__` 时 snapshot，PICK 阶段不再读 obs（避免 chase loop）
-- [ ] 跨 substep 用 `env.ee_target_override` + `env.gripper_action_override` 保持稳定目标
-- [ ] 用 `env.evaluate_success()` 判定成功
+1. **HOME**：等待复位
+2. **APPROACH**：移到 cube 上方 3.5cm（含 `FINGER_WIDTH_OFFSET=-0.015`）
+3. **DESCEND**：下降到 z=0.020（finger_pad 触 cube 顶）
+4. **GRASP**：渐进闭合（60 步斜坡）+ 接触检测后保压
+5. **LIFT**：抬起到 `TRANSPORT_Z=0.10`
+6. **TRANSPORT**：水平移到 plate 上方
+7. **PLACE_DESCEND**：闭环 `target = ee_cur + (desired_cube - cube_obs)` 下降到 plate 表面上方
+8. **RELEASE**：松开夹爪
+9. **RETRACT**：抬起撤离
 
-**关键文件**：
-- `sim/scripted_policies/pick_place.py`
-- `sim/controllers/ik_dls.py`（locked_joints 读 `data.ctrl[j]` 防止物理漂移污染 ctrl）
+**关键技巧**：
+- `cube_anchor`/`plate_anchor` 首次 snapshot，PICK 阶段不读 obs（防 chase loop）
+- 跨 substep 用 `env.ee_target_override` + `env.gripper_action_override` 保持稳定目标
+- 用 `env.evaluate_success()` 判定
 
-**验证**：
-- 跑 100 次随机 reset 的 PickPlaceRed，成功率 ≥ 90%（v21 配置实测 93.8%）
-- 失败模式分布有日志（用于改进 policy）
+**验证**：100 次随机 reset，成功率 ≥ 90%（v21 实测 93.8%）
 
 ---
 
-### T1.8 域随机化模块（基础）
+### T1.8 域随机化（基础）
 
-**目标**：让仿真生成的视觉数据具备分布多样性
+在 `sim/randomization/` 实现：
+- `lighting.py`：3 个点光源位置/强度
+- `textures.py`：桌面纹理库 10+ 张
+- `cube_pose.py`：xy + yaw（量化 4 等分）+ plate 位置 ±3cm
+- `camera_pose.py`：±5cm / ±5° front cam
 
-**步骤**：
-- [ ] 创建 `sim/randomization/`：
-  - `lighting.py`：随机化场景里 light0/light1/light2 三个点光源位置、强度
-  - `textures.py`：桌面纹理库（10+ 张 procedural / 公开图）
-  - `cube_pose.py`：cube 在工作区内 xy + yaw 随机化（yaw 量化到 4 等分）+ plate 位置 ±3cm 抖动
-  - `camera_pose.py`：±5cm / ±5° 抖动 front camera
-- [ ] **不要随机化 cube 颜色**：红是语言锚点，必须固定（否则破坏语义对齐）
-- [ ] 可选：plate 颜色/纹理可随机（不影响 instruction），增强 sim2real 鲁棒性
-- [ ] 在 `env.reset()` 中按概率调用
-- [ ] 留出 `--no-dr` 开关用于 debug
+**铁律**：**不要随机化 cube 颜色**——red 是语言锚点，破坏即破坏语义对齐。plate 颜色可随机（不影响指令）。
 
-**关键文件**：
-- `sim/randomization/*.py`
-
-**参考**：
-- robosuite domain randomization：`https://robosuite.ai/docs/modules/randomizers.html`
+`env.reset()` 按概率调用；留 `--no-dr` 开关。
 
 **验证**：连续 reset 10 次截图，视觉差异明显
 
@@ -284,32 +160,19 @@
 
 ### T1.9 LeRobot 数据格式 dummy 导出
 
-**目标**：先打通"仿真 → LeRobot dataset"管道，为 Phase 2 做准备
+在 `data/converters/sim_to_lerobot.py` 写 writer，用 T1.7 脚本策略跑 5 条 episode 存 LeRobot 格式；`task` 字段从 `data/instructions/pick_place.txt` 随机抽。
 
-**步骤**：
-- [ ] 在 `data/converters/sim_to_lerobot.py` 写一个 writer
-- [ ] 用 T1.7 的脚本策略跑 5 条 episode 并保存为 LeRobot 格式
-- [ ] `task` 字段从 `data/instructions/pick_place.txt`（含 10+ 条 red-task 同义指令）随机抽
-- [ ] 用 `lerobot-dataset-viz` 验证
-
-**关键文件**：
-- `data/converters/sim_to_lerobot.py`
-- `data/sim_generated/pick_place_v0/`：5 条 episode
-
-**参考**：
-- LeRobot dataset format：`https://huggingface.co/docs/lerobot/lerobot_dataset`
-
-**验证**：可视化工具能正常播放仿真采集的 5 条 episode
+**验证**：`lerobot-dataset-viz` 能正常播放
 
 ---
 
-## 验收标准（全部满足后进入 Phase 2）
+## 验收标准
 
 - [ ] SO-ARM101 在 MuJoCo 中可控、可渲染
-- [ ] PickPlaceRed 环境实现完整（reset/step/success/失败归因/双相机）
-- [ ] 脚本策略在仿真里 100 次随机 pick-place 成功率 ≥ 90%（实测 93.8%）
-- [ ] 域随机化模块可独立开关（cube 颜色不参与随机化）
-- [ ] 5 条仿真 episode 已成功导出为 LeRobot 格式并可视化
+- [ ] PickPlaceRed 环境完整（reset/step/success/失败归因/双相机）
+- [ ] 脚本策略 100 次成功率 ≥ 90%（实测 93.8%）
+- [ ] 域随机化可独立开关（cube 颜色不参与）
+- [ ] 5 条 episode 已导出 LeRobot 格式并可视化
 
 ---
 
@@ -317,55 +180,9 @@
 
 | 风险 | 应对 |
 |------|------|
-| pick-101 SO101 模型与真机有几何差异 | 用真机实测的关节限位 / 长度反向校准 MJCF；finger_pad 1.25mm 是 sim 假设，真机替换为硅胶垫 |
-| IK 解奇异时跳变 | DLS 阻尼项 + locked_joints 把 wrist 锁住；目标位姿限制在工作空间内 |
-| 渲染太慢拖累采集 | `MUJOCO_GL=egl` 离屏；scene XML 里 `offwidth/offheight` 设到 1920×1080 上限 |
-| Domain randomization 太激进导致策略不收敛 | 先 `--no-dr` 验证策略，再加 DR；DR 维度逐个加入 |
-| 夹爪在仿真里"抓住"了但物理不稳定 | cube friction `0.5 0.05 0.001` + condim=4 + priority=1 让 finger_pad 继承 cube 的高保真摩擦 |
-| 500Hz IK 让成功率 *变差* | sts3215 actuator 严重欠阻尼（ζ≈0.26），IK 比 actuator 还快会引起共振；用 100Hz IK + 跨 substep 锁定目标 |
-
----
-
-## 输出物
-
-- 可用的 SO101 仿真环境（PickPlaceRed）
-- 仿真 → LeRobot 数据转换工具
-- 脚本策略 baseline（Phase 2 的种子，成功率 93.8%）
-- 域随机化模块
-
----
-
-## 备选平台（已独立成档）
-
-本 Phase 主路径用 MuJoCo + Menagerie。下面 5 个平台是不同场景下的备选 / 学习参考，**每个都有独立的详细搭建文档**：
-
-| 备选 | 适用场景 | 详细文档 |
-|------|---------|---------|
-| LeRobot 自带 sim | Phase 0–1 **最快起步**（gym-lowcostrobot 含 SO-ARM 原生） | [alt-platform-lerobot-sim.md](alt-platform-lerobot-sim.md) |
-| RoboCasa / MimicGen | **Phase 3 算法移植必学** | [alt-platform-robocasa-mimicgen.md](alt-platform-robocasa-mimicgen.md) |
-| Genesis | GPU 极速数据生成对比 | [alt-platform-genesis.md](alt-platform-genesis.md) |
-| ManiSkill 3 | 公开 demo 数据集 + GPU 并行 | [alt-platform-maniskill3.md](alt-platform-maniskill3.md) |
-| Isaac Lab | NVIDIA 工业级 RTX 仿真 | [alt-platform-isaaclab.md](alt-platform-isaaclab.md) |
-
-### 快速决策树
-
-```
-你现在的状态？
-
-├─ Phase 0 还没出第一份 LeRobot dataset
-│   → LeRobot 自带 sim（1 天闭环）
-│
-├─ Phase 1 主路径开干
-│   → MuJoCo + Menagerie（本文档前 9 个任务）
-│
-├─ Phase 2 想加速大规模数据生成
-│   → 跑 Genesis / ManiSkill 3 对比实验
-│
-├─ Phase 3 准备实现数据扩增
-│   → RoboCasa / MimicGen 必学算法
-│
-└─ Phase 6 长期研究 / 想做 RL / 要 photorealism
-    → Isaac Lab
-```
-
-完整对比矩阵见 [docs/plans/README.md](README.md) 的「备选仿真平台」表格。
+| pick-101 模型与真机几何差异 | 用真机实测的关节限位 / 长度反向校准 MJCF；finger_pad 1.25mm 是 sim 假设，真机换硅胶垫 |
+| IK 解奇异时跳变 | DLS 阻尼 + locked_joints 锁 wrist；目标限制在工作空间内 |
+| 渲染太慢拖累采集 | `MUJOCO_GL=egl` 离屏；scene XML `offwidth/offheight` 设到 1920×1080 上限 |
+| DR 太激进导致策略不收敛 | 先 `--no-dr` 验证策略，再加 DR；维度逐个加入 |
+| 仿真"抓住"但物理不稳定 | cube friction `0.5 0.05 0.001` + condim=4 + priority=1，让 finger_pad 继承 cube 摩擦 |
+| **500Hz IK 让成功率反而变差** | sts3215 actuator 严重欠阻尼（ζ≈0.26），IK 比 actuator 还快引发共振；用 100Hz IK + 跨 substep 锁定目标 |

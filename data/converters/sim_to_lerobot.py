@@ -32,7 +32,12 @@ _SO101_MOTOR_NAMES = [
 ]
 
 
-def build_features(*, img_height: int = 480, img_width: int = 640) -> dict:
+def build_features(
+    *,
+    img_height: int = 480,
+    img_width: int = 640,
+    extra: dict[str, tuple[int, ...]] | None = None,
+) -> dict:
     """Default LeRobot feature schema for SO-101 PickPlaceRed.
 
     Conforms to the LeRobot SO-100/101 community convention used by SmolVLA
@@ -52,8 +57,15 @@ def build_features(*, img_height: int = 480, img_width: int = 640) -> dict:
     1080p captures without forking the schema; LeRobot validates frame
     shape on every add_frame, so this MUST match what env._compute_obs
     produces.
+
+    ``extra`` registers caller-supplied float32 columns by name → shape, e.g.
+    ``{"red_pose": (7,), "plate_pose": (7,)}``. Used by sim_teleop to ship
+    per-frame object poses so MimicGen ``get_object_poses()`` can pull them
+    out at conversion time. These columns are NOT consumed by mainstream
+    VLAs (which only see ``observation.*`` and ``action``) so they cost
+    storage but not training compatibility.
     """
-    return {
+    feats = {
         "observation.images.front": {
             "dtype": "video",
             "shape": (img_height, img_width, 3),
@@ -92,6 +104,14 @@ def build_features(*, img_height: int = 480, img_width: int = 640) -> dict:
             "names": ["dx", "dy", "dz", "gripper"],
         },
     }
+    if extra:
+        for name, shape in extra.items():
+            feats[name] = {
+                "dtype": "float32",
+                "shape": tuple(shape),
+                "names": [f"{name}_{i}" for i in range(int(np.prod(shape)))],
+            }
+    return feats
 
 
 # Back-compat alias — prefer build_features() so resolution travels with the call.
@@ -106,6 +126,7 @@ def make_or_resume_dataset(
     reset: bool = False,
     img_height: int = 480,
     img_width: int = 640,
+    extra_features: dict[str, tuple[int, ...]] | None = None,
 ) -> "DatasetWriter":
     """Open or resume a LeRobot dataset on disk.
 
@@ -116,7 +137,15 @@ def make_or_resume_dataset(
     they're ignored when resuming an existing one (the existing meta wins).
     """
     if features is None:
-        features = build_features(img_height=img_height, img_width=img_width)
+        features = build_features(img_height=img_height, img_width=img_width,
+                                  extra=extra_features)
+    elif extra_features:
+        for name, shape in extra_features.items():
+            features.setdefault(name, {
+                "dtype": "float32",
+                "shape": tuple(shape),
+                "names": [f"{name}_{i}" for i in range(int(np.prod(shape)))],
+            })
     root = Path.home() / ".cache" / "huggingface" / "lerobot" / repo_id
     meta_tasks = root / "meta" / "tasks.parquet"
 
@@ -153,6 +182,7 @@ class DatasetWriter:
         *,
         task: str,
         ee_action: np.ndarray | None = None,
+        extra: dict[str, np.ndarray] | None = None,
     ) -> None:
         """Write one frame.
 
@@ -163,17 +193,24 @@ class DatasetWriter:
         `ee_action`  — SIM-ONLY auxiliary, shape (4,), ee-delta normalized
                        [-1, 1] + gripper. If None, falls back to zeros —
                        acceptable for any caller that doesn't compute it.
+        `extra`      — caller-supplied columns matching the names registered
+                       via ``extra_features`` at dataset creation time (e.g.
+                       per-frame red/plate pose for downstream MimicGen).
         """
         if ee_action is None:
             ee_action = np.zeros(4, dtype=np.float32)
-        self.ds.add_frame({
+        frame = {
             "observation.images.front": obs["image_front"],
             "observation.images.wrist": obs["image_wrist"],
             "observation.state": obs["arm_qpos"].astype("float32"),
             "action": np.asarray(action, dtype=np.float32),
             "ee_action": np.asarray(ee_action, dtype=np.float32),
             "task": task,
-        })
+        }
+        if extra:
+            for name, value in extra.items():
+                frame[name] = np.asarray(value, dtype=np.float32)
+        self.ds.add_frame(frame)
 
     def save_episode(self) -> None:
         self.ds.save_episode()
